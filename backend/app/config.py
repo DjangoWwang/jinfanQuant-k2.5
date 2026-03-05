@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     FOF99_USERNAME: str = ""
     FOF99_PASSWORD: str = ""
+    FOF99_DEVICE_ID: str = ""
 
     RISK_FREE_RATE_TYPE: str = "fixed"
     RISK_FREE_RATE_VALUE: float = 0.025

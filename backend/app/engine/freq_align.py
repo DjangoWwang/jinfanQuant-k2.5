@@ -158,22 +158,88 @@ def align_frequencies(
     A new dict with the same keys, each value aligned to the chosen
     frequency.
     """
+    freqs = {
+        key: detect_frequency(series, trading_days)
+        for key, series in nav_dict.items()
+    }
+    has_mixed = len(set(freqs.values())) > 1
+
     result: dict[str, pd.Series] = {}
 
     if method == "interpolate":
         for key, series in nav_dict.items():
-            freq = detect_frequency(series, trading_days)
-            if freq == "weekly":
+            if freqs[key] == "weekly":
                 result[key] = interpolate_to_daily(series, trading_days)
             else:
                 result[key] = series
     else:
-        # Default: downsample everything to weekly
+        # Default: downsample everything to weekly if any is weekly
+        need_downsample = has_mixed or method == "downsample_force"
         for key, series in nav_dict.items():
-            freq = detect_frequency(series, trading_days)
-            if freq == "daily":
+            if need_downsample and freqs[key] == "daily":
                 result[key] = downsample_to_weekly(series, trading_days)
             else:
                 result[key] = series
 
     return result
+
+
+def align_to_common_dates(
+    nav_dict: dict[str, pd.Series],
+) -> dict[str, pd.Series]:
+    """Align multiple NAV series to their common date intersection.
+
+    All series are trimmed to the date range where all funds have data,
+    then only dates present in ALL series are kept.
+    This is essential for apples-to-apples comparison.
+    """
+    if not nav_dict:
+        return {}
+
+    # Find common date range (max of starts, min of ends)
+    starts = []
+    ends = []
+    for s in nav_dict.values():
+        s_clean = s.sort_index().dropna()
+        if not s_clean.empty:
+            starts.append(s_clean.index[0])
+            ends.append(s_clean.index[-1])
+
+    if not starts:
+        return {k: pd.Series(dtype=float) for k in nav_dict}
+
+    common_start = max(starts)
+    common_end = min(ends)
+
+    if common_start >= common_end:
+        return {k: pd.Series(dtype=float) for k in nav_dict}
+
+    # Trim to common range
+    trimmed = {}
+    for key, series in nav_dict.items():
+        s = series.sort_index().dropna()
+        s = s[(s.index >= common_start) & (s.index <= common_end)]
+        trimmed[key] = s
+
+    # Find dates present in ALL series
+    date_sets = [set(s.index) for s in trimmed.values()]
+    common_dates = sorted(set.intersection(*date_sets))
+
+    if not common_dates:
+        return {k: pd.Series(dtype=float) for k in nav_dict}
+
+    return {key: series.loc[common_dates] for key, series in trimmed.items()}
+
+
+def detect_mixed_frequencies(
+    nav_dict: dict[str, pd.Series],
+    trading_days: Sequence[datetime.date],
+) -> dict[str, str]:
+    """Detect frequency of each series and return a mapping.
+
+    Returns dict like {"fund_a": "daily", "fund_b": "weekly"}.
+    """
+    return {
+        key: detect_frequency(series, trading_days)
+        for key, series in nav_dict.items()
+    }

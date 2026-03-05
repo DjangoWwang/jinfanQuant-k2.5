@@ -17,7 +17,7 @@ from app.models.calendar import TradingCalendar
 
 
 def _get_xshg_sessions(
-    start_year: int = 2016, end_year: int = 2027
+    start_year: int = 2016, end_year: int = 2026
 ) -> list[datetime.date]:
     """Return all XSHG trading sessions between *start_year* and *end_year*."""
     cal = xcals.get_calendar("XSHG")
@@ -33,7 +33,7 @@ def _get_xshg_sessions(
 async def fill_trading_calendar(
     session: AsyncSession,
     start_year: int = 2016,
-    end_year: int = 2027,
+    end_year: int = 2026,
 ) -> int:
     """Populate the ``trading_calendar`` table with XSHG sessions.
 

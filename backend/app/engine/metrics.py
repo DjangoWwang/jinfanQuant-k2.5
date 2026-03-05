@@ -37,6 +37,26 @@ def _slice(
     return s
 
 
+def _annualization_factor(nav_series: pd.Series) -> float:
+    """Estimate annualization factor from the series observation frequency.
+
+    Daily data (~252), weekly (~52), monthly (~12).
+    Falls back to 252 if can't determine.
+    """
+    s = nav_series.sort_index().dropna()
+    if len(s) < 3:
+        return 252.0
+    deltas = pd.Series(s.index).diff().dropna().dt.days
+    median_gap = float(deltas.median())
+    if median_gap <= 2:
+        return 252.0
+    elif median_gap <= 8:
+        return 52.0
+    elif median_gap <= 35:
+        return 12.0
+    return 252.0
+
+
 # ---------------------------------------------------------------------------
 # Core metrics
 # ---------------------------------------------------------------------------
@@ -56,32 +76,38 @@ def calc_return(
     return float(s.iloc[-1] / s.iloc[0] - 1)
 
 
-def calc_annualized_return(nav_series: pd.Series) -> float:
-    """Annualised return assuming 252 trading days per year.
+def calc_annualized_return(
+    nav_series: pd.Series,
+    start_date: Optional[datetime.date] = None,
+    end_date: Optional[datetime.date] = None,
+) -> float:
+    """Annualised return, auto-detecting frequency.
 
-    ``annualized = (1 + total_return) ^ (252 / n_days) - 1``
+    ``annualized = (1 + total_return) ^ (ann_factor / n_periods) - 1``
     """
-    s = nav_series.sort_index().dropna()
+    s = _slice(nav_series, start_date, end_date).sort_index().dropna()
     if len(s) < 2:
         return 0.0
     total_return = s.iloc[-1] / s.iloc[0] - 1
-    n_days = len(s) - 1  # number of return observations
-    if n_days == 0:
+    n_periods = len(s) - 1
+    if n_periods == 0:
         return 0.0
-    ann = (1 + total_return) ** (252 / n_days) - 1
+    ann_factor = _annualization_factor(s)
+    ann = (1 + total_return) ** (ann_factor / n_periods) - 1
     return float(ann)
 
 
 def calc_max_drawdown(
     nav_series: pd.Series,
+    start_date: Optional[datetime.date] = None,
+    end_date: Optional[datetime.date] = None,
 ) -> tuple[float, datetime.date, datetime.date]:
     """Maximum drawdown and the peak / trough dates.
 
     Returns ``(drawdown, peak_date, trough_date)`` where *drawdown* is a
-    **negative** float (e.g. -0.15 for a 15 % drawdown).  If the series
-    has fewer than 2 points, returns ``(0.0, first_date, first_date)``.
+    **negative** float (e.g. -0.15 for a 15% drawdown).
     """
-    s = nav_series.sort_index().dropna()
+    s = _slice(nav_series, start_date, end_date).sort_index().dropna()
     if len(s) < 2:
         d = s.index[0] if len(s) else datetime.date.today()
         if isinstance(d, pd.Timestamp):
@@ -100,26 +126,153 @@ def calc_max_drawdown(
     return (float(drawdown.min()), peak_date, trough_date)
 
 
-def calc_annualized_volatility(nav_series: pd.Series) -> float:
-    """Annualised volatility (standard deviation of daily returns * sqrt(252))."""
-    rets = _daily_returns(nav_series.sort_index().dropna())
+def calc_drawdown_series(nav_series: pd.Series) -> pd.Series:
+    """Compute the full drawdown series (values <= 0)."""
+    s = nav_series.sort_index().dropna()
+    if len(s) < 2:
+        return pd.Series(dtype=float)
+    cummax = s.cummax()
+    return (s - cummax) / cummax
+
+
+def calc_annualized_volatility(
+    nav_series: pd.Series,
+    start_date: Optional[datetime.date] = None,
+    end_date: Optional[datetime.date] = None,
+) -> float:
+    """Annualised volatility (std of returns * sqrt(ann_factor))."""
+    s = _slice(nav_series, start_date, end_date).sort_index().dropna()
+    rets = _daily_returns(s)
     if len(rets) < 2:
         return 0.0
-    return float(rets.std(ddof=1) * np.sqrt(252))
+    ann_factor = _annualization_factor(s)
+    return float(rets.std(ddof=1) * np.sqrt(ann_factor))
+
+
+def calc_downside_deviation(
+    nav_series: pd.Series,
+    target_return: float = 0.0,
+) -> float:
+    """Annualised downside deviation (semi-deviation below target)."""
+    s = nav_series.sort_index().dropna()
+    rets = _daily_returns(s)
+    if len(rets) < 2:
+        return 0.0
+    ann_factor = _annualization_factor(s)
+    daily_target = (1 + target_return) ** (1 / ann_factor) - 1
+    downside = rets[rets < daily_target] - daily_target
+    if len(downside) == 0:
+        return 0.0
+    return float(np.sqrt((downside**2).mean()) * np.sqrt(ann_factor))
 
 
 def calc_sharpe_ratio(
-    nav_series: pd.Series, risk_free_rate: float = 0.025
+    nav_series: pd.Series,
+    risk_free_rate: float = 0.025,
+    start_date: Optional[datetime.date] = None,
+    end_date: Optional[datetime.date] = None,
 ) -> float:
     """Annualised Sharpe ratio.
 
     ``sharpe = (ann_return - risk_free_rate) / ann_volatility``
     """
-    ann_ret = calc_annualized_return(nav_series)
-    ann_vol = calc_annualized_volatility(nav_series)
+    ann_ret = calc_annualized_return(nav_series, start_date, end_date)
+    ann_vol = calc_annualized_volatility(nav_series, start_date, end_date)
     if ann_vol == 0.0:
         return 0.0
     return float((ann_ret - risk_free_rate) / ann_vol)
+
+
+def calc_sortino_ratio(
+    nav_series: pd.Series,
+    risk_free_rate: float = 0.025,
+) -> float:
+    """Annualised Sortino ratio.
+
+    ``sortino = (ann_return - risk_free_rate) / downside_deviation``
+    """
+    ann_ret = calc_annualized_return(nav_series)
+    dd = calc_downside_deviation(nav_series, target_return=risk_free_rate)
+    if dd == 0.0:
+        return 0.0
+    return float((ann_ret - risk_free_rate) / dd)
+
+
+def calc_calmar_ratio(nav_series: pd.Series) -> float:
+    """Calmar ratio = annualized_return / abs(max_drawdown).
+
+    Returns 0 if max drawdown is zero.
+    """
+    ann_ret = calc_annualized_return(nav_series)
+    mdd, _, _ = calc_max_drawdown(nav_series)
+    if mdd == 0.0:
+        return 0.0
+    return float(ann_ret / abs(mdd))
+
+
+# ---------------------------------------------------------------------------
+# Normalized NAV (for comparison charts)
+# ---------------------------------------------------------------------------
+
+def normalize_nav(
+    nav_series: pd.Series,
+    base: float = 1.0,
+    start_date: Optional[datetime.date] = None,
+    end_date: Optional[datetime.date] = None,
+) -> pd.Series:
+    """Rebase a NAV series so the first value equals *base*.
+
+    Useful for multi-fund comparison charts where each series
+    starts at 1.0 on the same date.
+    """
+    s = _slice(nav_series, start_date, end_date).sort_index().dropna()
+    if s.empty:
+        return s
+    return s / s.iloc[0] * base
+
+
+# ---------------------------------------------------------------------------
+# Interval helpers (for preset date ranges)
+# ---------------------------------------------------------------------------
+
+def interval_dates(
+    preset: str,
+    reference_date: Optional[datetime.date] = None,
+) -> tuple[datetime.date, datetime.date]:
+    """Compute (start_date, end_date) for common presets.
+
+    Presets: "wtd" (week-to-date), "mtd" (month-to-date),
+    "qtd" (quarter-to-date), "ytd" (year-to-date),
+    "1m", "3m", "6m", "1y", "2y", "3y", "5y", "inception".
+    """
+    today = reference_date or datetime.date.today()
+
+    if preset == "wtd":
+        start = today - datetime.timedelta(days=today.weekday())
+        return (start, today)
+    elif preset == "mtd":
+        return (today.replace(day=1), today)
+    elif preset == "qtd":
+        q_month = ((today.month - 1) // 3) * 3 + 1
+        return (today.replace(month=q_month, day=1), today)
+    elif preset == "ytd":
+        return (today.replace(month=1, day=1), today)
+
+    months_map = {"1m": 1, "3m": 3, "6m": 6, "1y": 12, "2y": 24, "3y": 36, "5y": 60}
+    if preset in months_map:
+        months = months_map[preset]
+        y = today.year
+        m = today.month - months
+        while m <= 0:
+            m += 12
+            y -= 1
+        d = min(today.day, 28)
+        return (datetime.date(y, m, d), today)
+
+    if preset == "inception":
+        return (datetime.date(1970, 1, 1), today)
+
+    raise ValueError(f"Unknown preset: {preset}")
 
 
 # ---------------------------------------------------------------------------
@@ -127,19 +280,23 @@ def calc_sharpe_ratio(
 # ---------------------------------------------------------------------------
 
 def calc_all_metrics(
-    nav_series: pd.Series, risk_free_rate: float = 0.025
+    nav_series: pd.Series,
+    risk_free_rate: float = 0.025,
+    start_date: Optional[datetime.date] = None,
+    end_date: Optional[datetime.date] = None,
 ) -> dict:
     """Return a dict with all key performance metrics.
 
-    Keys: ``total_return``, ``annualized_return``, ``max_drawdown``,
-    ``max_dd_peak``, ``max_dd_trough``, ``annualized_volatility``,
-    ``sharpe_ratio``.
+    Supports optional date slicing for interval calculations.
     """
-    total_ret = calc_return(nav_series)
-    ann_ret = calc_annualized_return(nav_series)
-    mdd, peak, trough = calc_max_drawdown(nav_series)
-    ann_vol = calc_annualized_volatility(nav_series)
-    sharpe = calc_sharpe_ratio(nav_series, risk_free_rate)
+    s = _slice(nav_series, start_date, end_date)
+    total_ret = calc_return(s)
+    ann_ret = calc_annualized_return(s)
+    mdd, peak, trough = calc_max_drawdown(s)
+    ann_vol = calc_annualized_volatility(s)
+    sharpe = calc_sharpe_ratio(s, risk_free_rate)
+    sortino = calc_sortino_ratio(s, risk_free_rate)
+    calmar = calc_calmar_ratio(s)
 
     return {
         "total_return": total_ret,
@@ -149,4 +306,30 @@ def calc_all_metrics(
         "max_dd_trough": trough.isoformat() if isinstance(trough, datetime.date) else str(trough),
         "annualized_volatility": ann_vol,
         "sharpe_ratio": sharpe,
+        "sortino_ratio": sortino,
+        "calmar_ratio": calmar,
     }
+
+
+def calc_interval_metrics(
+    nav_series: pd.Series,
+    presets: list[str],
+    risk_free_rate: float = 0.025,
+    reference_date: Optional[datetime.date] = None,
+) -> dict[str, dict]:
+    """Compute metrics for multiple interval presets at once.
+
+    Returns a dict mapping preset name to its metrics dict.
+    """
+    result = {}
+    for preset in presets:
+        try:
+            sd, ed = interval_dates(preset, reference_date)
+            s = _slice(nav_series, sd, ed)
+            if len(s) >= 2:
+                result[preset] = calc_all_metrics(s, risk_free_rate)
+            else:
+                result[preset] = None
+        except ValueError:
+            result[preset] = None
+    return result

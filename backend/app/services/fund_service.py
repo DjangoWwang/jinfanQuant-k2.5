@@ -3,91 +3,90 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Any, Sequence
 
+import pandas as pd
+from sqlalchemy import select, func, or_
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.schemas.fund import FundCreate, FundResponse, FundUpdate
+from app.models.fund import Fund, NavHistory
+from app.schemas.fund import FundCreate, FundResponse, FundUpdate, FundListParams
 
 logger = logging.getLogger(__name__)
 
 
 class FundService:
-    """Service encapsulating fund CRUD and NAV operations.
-
-    All public methods accept an ``AsyncSession`` so that the caller
-    (typically an API route) controls the transaction boundary.
-    """
+    """Fund CRUD and NAV operations."""
 
     # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
 
-    async def create_fund(
-        self, db: AsyncSession, payload: FundCreate
-    ) -> FundResponse:
-        """Register a new fund.
+    async def create_fund(self, db: AsyncSession, payload: FundCreate) -> Fund:
+        fund = Fund(**payload.model_dump())
+        db.add(fund)
+        await db.flush()
+        await db.refresh(fund)
+        return fund
 
-        Args:
-            db: Active database session.
-            payload: Validated creation data.
-
-        Returns:
-            The newly created fund as a response schema.
-        """
-        # TODO: Insert into the funds table via SQLAlchemy model.
-        #   fund = Fund(**payload.model_dump())
-        #   db.add(fund)
-        #   await db.commit()
-        #   await db.refresh(fund)
-        #   return FundResponse.model_validate(fund)
-        raise NotImplementedError("FundService.create_fund not yet implemented")
-
-    async def get_fund(self, db: AsyncSession, fund_id: int) -> FundResponse | None:
-        """Retrieve a single fund by primary key.
-
-        Returns None if the fund does not exist.
-        """
-        # TODO: query = select(Fund).where(Fund.id == fund_id)
-        #   result = await db.execute(query)
-        #   fund = result.scalar_one_or_none()
-        #   return FundResponse.model_validate(fund) if fund else None
-        raise NotImplementedError
+    async def get_fund(self, db: AsyncSession, fund_id: int) -> Fund | None:
+        result = await db.execute(select(Fund).where(Fund.id == fund_id))
+        return result.scalar_one_or_none()
 
     async def list_funds(
-        self,
-        db: AsyncSession,
-        strategy_type: str | None = None,
-        skip: int = 0,
-        limit: int = 50,
-    ) -> list[FundResponse]:
-        """List funds with optional filtering and pagination.
+        self, db: AsyncSession, params: FundListParams
+    ) -> tuple[list[Fund], int]:
+        query = select(Fund).where(Fund.status == "active")
 
-        Args:
-            strategy_type: Filter by strategy category (optional).
-            skip: Number of records to skip.
-            limit: Maximum records to return.
-        """
-        # TODO: Build query with optional where clause, offset, limit.
-        raise NotImplementedError
+        if params.strategy_type:
+            query = query.where(Fund.strategy_type == params.strategy_type)
+        if params.strategy_sub:
+            query = query.where(Fund.strategy_sub == params.strategy_sub)
+        if params.nav_frequency:
+            query = query.where(Fund.nav_frequency == params.nav_frequency)
+        if params.search:
+            pattern = f"%{params.search}%"
+            query = query.where(
+                or_(
+                    Fund.fund_name.ilike(pattern),
+                    Fund.filing_number.ilike(pattern),
+                    Fund.manager_name.ilike(pattern),
+                )
+            )
+
+        # Count
+        count_q = select(func.count()).select_from(query.subquery())
+        total = (await db.execute(count_q)).scalar() or 0
+
+        # Paginate
+        query = query.order_by(Fund.id).offset(
+            (params.page - 1) * params.page_size
+        ).limit(params.page_size)
+
+        result = await db.execute(query)
+        return list(result.scalars().all()), total
 
     async def update_fund(
         self, db: AsyncSession, fund_id: int, payload: FundUpdate
-    ) -> FundResponse | None:
-        """Partially update an existing fund.
-
-        Returns the updated fund, or None if not found.
-        """
-        # TODO: Fetch, apply non-None fields, commit.
-        raise NotImplementedError
+    ) -> Fund | None:
+        fund = await self.get_fund(db, fund_id)
+        if not fund:
+            return None
+        for field, value in payload.model_dump(exclude_unset=True).items():
+            setattr(fund, field, value)
+        await db.flush()
+        await db.refresh(fund)
+        return fund
 
     async def delete_fund(self, db: AsyncSession, fund_id: int) -> bool:
-        """Delete a fund and its associated NAV records.
-
-        Returns True if the fund existed and was deleted.
-        """
-        # TODO: Cascade delete or soft-delete.
-        raise NotImplementedError
+        fund = await self.get_fund(db, fund_id)
+        if not fund:
+            return False
+        await db.delete(fund)
+        await db.flush()
+        return True
 
     # ------------------------------------------------------------------
     # NAV operations
@@ -99,32 +98,95 @@ class FundService:
         fund_id: int,
         records: list[dict[str, Any]],
     ) -> int:
-        """Bulk upsert NAV records for a fund.
+        """Bulk upsert NAV records using INSERT ... ON CONFLICT DO UPDATE."""
+        if not records:
+            return 0
 
-        Uses INSERT ... ON CONFLICT (fund_id, nav_date) DO UPDATE
-        to handle duplicates gracefully.
+        rows = []
+        for r in records:
+            rows.append({
+                "fund_id": fund_id,
+                "nav_date": r["nav_date"],
+                "unit_nav": r.get("unit_nav"),
+                "cumulative_nav": r.get("cumulative_nav"),
+                "adjusted_nav": r.get("adjusted_nav"),
+                "daily_return": r.get("daily_return"),
+                "data_source": r.get("data_source", "fof99"),
+            })
 
-        Args:
-            fund_id: Target fund ID.
-            records: List of dicts with nav_date, unit_nav, cumulative_nav.
+        stmt = pg_insert(NavHistory).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_nav_history_fund_date",
+            set_={
+                "unit_nav": stmt.excluded.unit_nav,
+                "cumulative_nav": stmt.excluded.cumulative_nav,
+                "adjusted_nav": stmt.excluded.adjusted_nav,
+                "daily_return": stmt.excluded.daily_return,
+            },
+        )
+        await db.execute(stmt)
+        await db.flush()
 
-        Returns:
-            Number of rows upserted.
-        """
-        # TODO: Use bulk insert with on_conflict_do_update.
-        raise NotImplementedError
+        # Update fund's latest_nav
+        await self._update_latest_nav(db, fund_id)
+
+        return len(rows)
 
     async def get_nav_history(
         self,
         db: AsyncSession,
         fund_id: int,
-        start_date: str | None = None,
-        end_date: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Fetch NAV history for a fund within an optional date range.
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> list[NavHistory]:
+        query = (
+            select(NavHistory)
+            .where(NavHistory.fund_id == fund_id)
+            .order_by(NavHistory.nav_date)
+        )
+        if start_date:
+            query = query.where(NavHistory.nav_date >= start_date)
+        if end_date:
+            query = query.where(NavHistory.nav_date <= end_date)
 
-        Returns:
-            Ordered list of NAV record dicts.
-        """
-        # TODO: Query nav_history table with date filters, order by nav_date.
-        raise NotImplementedError
+        result = await db.execute(query)
+        return list(result.scalars().all())
+
+    async def get_nav_series(
+        self,
+        db: AsyncSession,
+        fund_id: int,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> pd.Series:
+        """Get NAV as a pandas Series indexed by date (for metrics calculation)."""
+        records = await self.get_nav_history(db, fund_id, start_date, end_date)
+        if not records:
+            return pd.Series(dtype=float)
+        dates = [r.nav_date for r in records]
+        navs = [float(r.unit_nav) for r in records if r.unit_nav is not None]
+        if len(navs) != len(dates):
+            # Filter out records without NAV
+            pairs = [(r.nav_date, float(r.unit_nav)) for r in records if r.unit_nav is not None]
+            if not pairs:
+                return pd.Series(dtype=float)
+            dates, navs = zip(*pairs)
+        return pd.Series(navs, index=pd.DatetimeIndex(dates), name=f"fund_{fund_id}")
+
+    async def _update_latest_nav(self, db: AsyncSession, fund_id: int) -> None:
+        """Update the fund's latest_nav and latest_nav_date from nav_history."""
+        result = await db.execute(
+            select(NavHistory.unit_nav, NavHistory.nav_date)
+            .where(NavHistory.fund_id == fund_id)
+            .order_by(NavHistory.nav_date.desc())
+            .limit(1)
+        )
+        row = result.first()
+        if row:
+            fund = await self.get_fund(db, fund_id)
+            if fund:
+                fund.latest_nav = row[0]
+                fund.latest_nav_date = row[1]
+
+
+fund_service = FundService()
