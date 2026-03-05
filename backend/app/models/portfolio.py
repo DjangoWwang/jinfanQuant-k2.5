@@ -47,7 +47,7 @@ class BacktestResult(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     portfolio_id = Column(
-        Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False
+        Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=True
     )
     run_date = Column(DateTime(timezone=True), server_default=func.now())
     config_json = Column(JSON, nullable=True)

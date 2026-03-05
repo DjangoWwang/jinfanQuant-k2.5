@@ -52,6 +52,15 @@ class BacktestConfigSchema(BaseModel):
         10_000_000.0, gt=0, description="Starting capital (CNY)"
     )
     rebalance_frequency: str = Field("monthly")
+    history_mode: str = Field(
+        "intersection",
+        description=(
+            "How to handle funds with different history lengths: "
+            "'intersection' (strict common dates), "
+            "'dynamic_entry' (funds enter when data available), "
+            "'truncate' (exclude funds without enough data)"
+        ),
+    )
     benchmark_index: str | None = Field(
         None, description="Benchmark index code for comparison"
     )
