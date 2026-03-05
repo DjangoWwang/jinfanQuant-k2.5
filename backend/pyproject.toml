@@ -1,0 +1,38 @@
+[tool.poetry]
+name = "jinfan-quant-backend"
+version = "0.1.0"
+description = "晋帆投研 FOF投研平台后端"
+authors = ["鹭岛晋帆"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.115.0"
+uvicorn = {extras = ["standard"], version = "^0.34.0"}
+sqlalchemy = {extras = ["asyncio"], version = "^2.0"}
+asyncpg = "^0.30.0"
+alembic = "^1.14.0"
+pydantic = "^2.0"
+pydantic-settings = "^2.0"
+httpx = "^0.28.0"
+beautifulsoup4 = "^4.12"
+pandas = "^2.2"
+numpy = "^2.0"
+scipy = "^1.14"
+exchange-calendars = "^4.5"
+apscheduler = "^3.10"
+openpyxl = "^3.1"
+python-multipart = "^0.0.18"
+aiofiles = "^24.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+pytest-asyncio = "^0.24"
+ruff = "^0.8"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 120
