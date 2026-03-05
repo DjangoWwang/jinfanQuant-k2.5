@@ -49,6 +49,8 @@ class FundScraper:
         strategy_ids: list[int] | None = None,
         page: int = 1,
         pagesize: int = 300,
+        order_by: str = "lastOneMonthReturn",
+        order: int = 1,
     ) -> dict[str, Any]:
         """全量基金搜索 (POST /newgoapi/fund/advancedList)。
 
@@ -57,11 +59,18 @@ class FundScraper:
             strategy_ids: 策略分类ID列表 (如 [74] 表示量化期货)
             page: 页码
             pagesize: 每页数量 (最大300)
+            order_by: 排序字段 (lastOneMonthReturn, inception_date, price_change等)
+            order: 1=降序, 2=升序
 
         Returns:
             {"list": [...], "total": N, "page": ..., "pagesize": ...}
         """
-        body: dict[str, Any] = {"page": page, "pagesize": min(pagesize, 300)}
+        body: dict[str, Any] = {
+            "page": page,
+            "pagesize": min(pagesize, 300),
+            "order_by": order_by,
+            "order": order,
+        }
         if keyword:
             body["keyValue"] = keyword
         if strategy_ids:
