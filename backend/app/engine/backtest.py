@@ -7,6 +7,7 @@ historical NAV data, and a rebalancing schedule.
 from __future__ import annotations
 
 import datetime
+import logging
 from typing import Optional, Sequence
 
 import pandas as pd
@@ -14,6 +15,8 @@ from pydantic import BaseModel, Field
 
 from app.engine.metrics import calc_all_metrics
 from app.engine.freq_align import align_frequencies
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -36,6 +39,10 @@ class BacktestConfig(BaseModel):
     freq_align_method: str = Field(
         default="downsample",
         description="How to align mixed-frequency NAV series: 'downsample' or 'interpolate'.",
+    )
+    risk_free_rate: float = Field(
+        default=0.02,
+        description="Annual risk-free rate for Sharpe/Sortino (default 2%).",
     )
     history_mode: str = Field(
         default="intersection",
@@ -66,8 +73,7 @@ class BacktestResult(BaseModel):
         description="Dynamic entry log: when each fund entered the portfolio.",
     )
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = {"arbitrary_types_allowed": True}
 
 
 # ---------------------------------------------------------------------------
@@ -92,14 +98,16 @@ class BacktestEngine:
     ) -> set[datetime.date]:
         """Return the set of dates on which the portfolio should rebalance."""
         if freq == "daily":
-            return set(dates)
+            # Exclude first day — initial portfolio construction, not rebalance.
+            return set(dates[1:]) if len(dates) > 1 else set()
 
         rebalance: set[datetime.date] = set()
         if not dates:
             return rebalance
 
+        # NOTE: Do NOT add dates[0] — the first day is initial portfolio
+        # construction, not a rebalance. Transaction costs should not apply.
         prev = dates[0]
-        rebalance.add(prev)
 
         for d in dates[1:]:
             trigger = False
@@ -139,6 +147,11 @@ class BacktestEngine:
             Sorted trading days from the calendar.
         """
         mode = config.history_mode
+        logger.info(
+            "Backtest start: %s → %s, mode=%s, funds=%d, rebalance=%s, cost=%.1fbps",
+            config.start_date, config.end_date, mode,
+            len(weights), config.rebalance_freq, config.transaction_cost_bps,
+        )
 
         if mode == "dynamic_entry":
             return await self._run_dynamic_entry(config, weights, nav_dict, trading_days)
@@ -224,24 +237,37 @@ class BacktestEngine:
         current_weights: dict[str, float] = {}
         active_funds: set[str] = set()
         entry_log: list[dict] = []
+        is_first_day = True  # First entry is portfolio construction, no cost
 
         for ts in sim_dates:
-            d = ts.date() if isinstance(ts, pd.Timestamp) else d
+            d = ts.date() if isinstance(ts, pd.Timestamp) else ts
 
             # Check for new funds entering
+            # Use d > fund_start (not >=) to avoid point-in-time bias:
+            # on fund_start day we only learn the fund exists; we can trade
+            # into it starting from the next observation.
             newly_entered = []
             for fund_key in fund_returns:
                 if fund_key not in active_funds:
                     fund_start = fund_start_dates[fund_key]
-                    if d >= fund_start:
+                    if d > fund_start:
                         newly_entered.append(fund_key)
                         active_funds.add(fund_key)
 
             # If new funds entered, rebalance to target weights (normalised to active set)
+            entry_cost_turnover = 0.0
             if newly_entered:
+                old_weights = dict(current_weights)
                 active_w = {k: weights.get(k, 0.0) for k in active_funds}
                 total_w = sum(active_w.values()) or 1.0
                 current_weights = {k: v / total_w for k, v in active_w.items()}
+                if is_first_day:
+                    is_first_day = False  # no cost on initial build
+                elif cost_rate > 0:
+                    entry_cost_turnover = sum(
+                        abs(old_weights.get(k, 0) - current_weights.get(k, 0))
+                        for k in set(old_weights) | set(current_weights)
+                    )
                 entry_log.append({"date": d.isoformat(), "funds_entered": newly_entered})
 
             if not current_weights:
@@ -259,6 +285,9 @@ class BacktestEngine:
                 new_weights[fund] = w * (1 + r)
 
             nav_today = portfolio_nav[-1] * (1 + port_return)
+            # Apply entry cost on nav_today (consistent with scheduled rebalance)
+            if entry_cost_turnover > 0:
+                nav_today *= (1 - entry_cost_turnover * cost_rate)
 
             # Rebalance if scheduled (and no new entry already triggered rebalance)
             if d in rebalance_dates and not newly_entered:
@@ -283,7 +312,7 @@ class BacktestEngine:
         # Build result
         nav_index = [d.date() if isinstance(d, pd.Timestamp) else d for d in sim_dates]
         nav_s = pd.Series(portfolio_nav[1:], index=pd.DatetimeIndex(nav_index))
-        metrics = calc_all_metrics(nav_s)
+        metrics = calc_all_metrics(nav_s, risk_free_rate=config.risk_free_rate)
         nav_out = {d.isoformat(): float(v) for d, v in zip(nav_index, portfolio_nav[1:])}
 
         return BacktestResult(
@@ -346,6 +375,9 @@ class BacktestEngine:
             if d in rebalance_dates:
                 total_weight = sum(new_weights.values()) or 1.0
                 drift_weights = {k: v / total_weight for k, v in new_weights.items()}
+                # sum(|drift - target|) = double-sided turnover (buy + sell
+                # mirror each other). Multiply by one-way cost_rate to get
+                # total cost: each unit of turnover incurs cost on one side.
                 turnover = sum(
                     abs(drift_weights.get(k, 0) - weights.get(k, 0))
                     for k in set(drift_weights) | set(weights)
@@ -362,7 +394,13 @@ class BacktestEngine:
             d.date() if isinstance(d, pd.Timestamp) else d for d in sim_dates
         ]
         nav_s = pd.Series(portfolio_nav[1:], index=pd.DatetimeIndex(nav_index))
-        metrics = calc_all_metrics(nav_s)
+        metrics = calc_all_metrics(nav_s, risk_free_rate=config.risk_free_rate)
         nav_out = {d.isoformat(): float(v) for d, v in zip(nav_index, portfolio_nav[1:])}
 
+        logger.info(
+            "Backtest done: %d periods, final_nav=%.6f, return=%.4f%%, mdd=%.4f%%",
+            len(nav_out), portfolio_nav[-1],
+            metrics.get("total_return", 0) * 100,
+            metrics.get("max_drawdown", 0) * 100,
+        )
         return BacktestResult(nav_series=nav_out, metrics=metrics, config=config)

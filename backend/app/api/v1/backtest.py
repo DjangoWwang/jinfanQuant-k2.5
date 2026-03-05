@@ -20,6 +20,19 @@ from app.services.fund_service import fund_service
 router = APIRouter(prefix="/backtest", tags=["backtest"])
 
 
+def _build_nav_and_drawdown(nav_series: dict[str, float]):
+    """Build nav_list and drawdown_list from a nav_series dict."""
+    nav_list = []
+    drawdown_list = []
+    peak = 0.0
+    for date_str, nav in sorted(nav_series.items()):
+        nav_list.append({"date": date_str, "nav": round(nav, 6)})
+        peak = max(peak, nav)
+        dd = (nav - peak) / peak if peak > 0 else 0.0
+        drawdown_list.append({"date": date_str, "drawdown": round(dd, 6)})
+    return nav_list, drawdown_list
+
+
 async def _get_nav_series(
     db: AsyncSession,
     fund_id: int,
@@ -92,13 +105,14 @@ async def run_backtest(
             f"以下基金在回测区间内无净值数据: {', '.join(missing_funds)}"
         )
 
-    # 构造引擎配置
+    # 构造引擎配置 — use schema fields, not hardcoded values
     config = BacktestConfig(
         start_date=req.start_date,
         end_date=req.end_date,
         rebalance_freq=req.rebalance_frequency,
-        transaction_cost_bps=0.0,
-        freq_align_method="downsample",
+        transaction_cost_bps=req.transaction_cost_bps,
+        freq_align_method=req.freq_align_method,
+        risk_free_rate=req.risk_free_rate,
         history_mode=req.history_mode,
     )
 
@@ -110,14 +124,7 @@ async def run_backtest(
     result = await engine.run(config, str_weights, nav_dict, trading_days)
 
     # 构造NAV序列 + 回撤序列
-    nav_list = []
-    drawdown_list = []
-    peak = 0.0
-    for date_str, nav in sorted(result.nav_series.items()):
-        nav_list.append({"date": date_str, "nav": round(nav, 6)})
-        peak = max(peak, nav)
-        dd = (nav - peak) / peak if peak > 0 else 0.0
-        drawdown_list.append({"date": date_str, "drawdown": round(dd, 6)})
+    nav_list, drawdown_list = _build_nav_and_drawdown(result.nav_series)
 
     # 构造月度收益表
     monthly_returns = _calc_monthly_returns(result.nav_series)
@@ -174,14 +181,7 @@ async def get_backtest_result(
         raise HTTPException(404, "回测结果不存在")
 
     nav_series = record.nav_series_json or {}
-    nav_list = [{"date": d, "nav": round(v, 6)} for d, v in sorted(nav_series.items())]
-
-    drawdown_list = []
-    peak = 0.0
-    for item in nav_list:
-        peak = max(peak, item["nav"])
-        dd = (item["nav"] - peak) / peak if peak > 0 else 0.0
-        drawdown_list.append({"date": item["date"], "drawdown": round(dd, 6)})
+    nav_list, drawdown_list = _build_nav_and_drawdown(nav_series)
 
     return {
         "backtest_id": record.id,
@@ -236,14 +236,22 @@ def _calc_monthly_returns(nav_series: dict[str, float]) -> list[dict]:
     result = []
     prev_end_nav = None
     for (year, month), entries in sorted(monthly.items()):
+        start_nav = entries[0][1]
         end_nav = entries[-1][1]
         if prev_end_nav is not None and prev_end_nav > 0:
+            # Normal month: return from previous month-end to this month-end
             ret = (end_nav - prev_end_nav) / prev_end_nav
-            result.append({
-                "year": year,
-                "month": month,
-                "return_pct": round(ret * 100, 4),
-            })
+        elif prev_end_nav is None and start_nav > 0 and len(entries) > 1:
+            # First month: return from first observation to month-end
+            ret = (end_nav - start_nav) / start_nav
+        else:
+            prev_end_nav = end_nav
+            continue
+        result.append({
+            "year": year,
+            "month": month,
+            "return_pct": round(ret * 100, 4),
+        })
         prev_end_nav = end_nav
 
     return result

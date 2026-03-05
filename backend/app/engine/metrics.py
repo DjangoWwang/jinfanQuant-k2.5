@@ -7,6 +7,7 @@ values (NAV).
 
 from __future__ import annotations
 
+import calendar
 import datetime
 from typing import Optional
 
@@ -38,23 +39,19 @@ def _slice(
 
 
 def _annualization_factor(nav_series: pd.Series) -> float:
-    """Estimate annualization factor from the series observation frequency.
+    """Compute annualization factor using 365 / avg_calendar_gap.
 
-    Daily data (~252), weekly (~52), monthly (~12).
-    Falls back to 252 if can't determine.
+    This follows the 火富牛 convention: 365 / average calendar-day gap
+    between observations.  Falls back to 252 if too few data points.
     """
     s = nav_series.sort_index().dropna()
-    if len(s) < 3:
-        return 252.0
+    if len(s) < 2:
+        return 365.0  # fallback: assume daily with ~1 day gap
     deltas = pd.Series(s.index).diff().dropna().dt.days
-    median_gap = float(deltas.median())
-    if median_gap <= 2:
-        return 252.0
-    elif median_gap <= 8:
-        return 52.0
-    elif median_gap <= 35:
-        return 12.0
-    return 252.0
+    avg_gap = float(deltas.mean())
+    if avg_gap <= 0:
+        return 365.0
+    return 365.0 / avg_gap
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +90,16 @@ def calc_annualized_return(
     if n_periods == 0:
         return 0.0
     ann_factor = _annualization_factor(s)
-    ann = (1 + total_return) ** (ann_factor / n_periods) - 1
+    base = 1 + total_return
+    exp = ann_factor / n_periods
+    # Guard against negative base (total loss > 100%), which would make
+    # fractional exponentiation produce complex numbers.
+    if base <= 0:
+        return -1.0
+    # For negative returns use sign-preserving formula:
+    # -((1 / base)^exp - 1) when base < 1 would give negative result anyway,
+    # but standard formula works fine as long as base > 0.
+    ann = base ** exp - 1
     return float(ann)
 
 
@@ -153,22 +159,28 @@ def calc_downside_deviation(
     nav_series: pd.Series,
     target_return: float = 0.0,
 ) -> float:
-    """Annualised downside deviation (semi-deviation below target)."""
+    """Annualised downside deviation following 火富牛 convention.
+
+    Uses ``min(Xi - rf_period, 0)`` clipping on ALL observations,
+    denominator is ``n - 1`` (full sample size, not just negative count).
+
+    ``DD = sqrt( sum(min(Xi-rf,0)^2) / (n-1) ) * sqrt(ann_factor)``
+    """
     s = nav_series.sort_index().dropna()
     rets = _daily_returns(s)
-    if len(rets) < 2:
+    n = len(rets)
+    if n < 2:
         return 0.0
     ann_factor = _annualization_factor(s)
     daily_target = (1 + target_return) ** (1 / ann_factor) - 1
-    downside = rets[rets < daily_target] - daily_target
-    if len(downside) == 0:
-        return 0.0
-    return float(np.sqrt((downside**2).mean()) * np.sqrt(ann_factor))
+    # Clip: min(Xi - rf, 0) — zeros for returns above target
+    clipped = np.minimum(rets - daily_target, 0.0)
+    return float(np.sqrt((clipped**2).sum() / (n - 1)) * np.sqrt(ann_factor))
 
 
 def calc_sharpe_ratio(
     nav_series: pd.Series,
-    risk_free_rate: float = 0.025,
+    risk_free_rate: float = 0.02,
     start_date: Optional[datetime.date] = None,
     end_date: Optional[datetime.date] = None,
 ) -> float:
@@ -185,15 +197,20 @@ def calc_sharpe_ratio(
 
 def calc_sortino_ratio(
     nav_series: pd.Series,
-    risk_free_rate: float = 0.025,
+    risk_free_rate: float = 0.02,
 ) -> float:
     """Annualised Sortino ratio.
 
     ``sortino = (ann_return - risk_free_rate) / downside_deviation``
+
+    Returns 0 if insufficient data, or a capped large value when
+    downside deviation is zero (all returns above target).
     """
     ann_ret = calc_annualized_return(nav_series)
     dd = calc_downside_deviation(nav_series, target_return=risk_free_rate)
     if dd == 0.0:
+        if ann_ret > risk_free_rate:
+            return 99.99  # No downside risk, positive excess return
         return 0.0
     return float((ann_ret - risk_free_rate) / dd)
 
@@ -266,7 +283,8 @@ def interval_dates(
         while m <= 0:
             m += 12
             y -= 1
-        d = min(today.day, 28)
+        max_day = calendar.monthrange(y, m)[1]
+        d = min(today.day, max_day)
         return (datetime.date(y, m, d), today)
 
     if preset == "inception":
@@ -281,7 +299,7 @@ def interval_dates(
 
 def calc_all_metrics(
     nav_series: pd.Series,
-    risk_free_rate: float = 0.025,
+    risk_free_rate: float = 0.02,
     start_date: Optional[datetime.date] = None,
     end_date: Optional[datetime.date] = None,
 ) -> dict:
@@ -314,7 +332,7 @@ def calc_all_metrics(
 def calc_interval_metrics(
     nav_series: pd.Series,
     presets: list[str],
-    risk_free_rate: float = 0.025,
+    risk_free_rate: float = 0.02,
     reference_date: Optional[datetime.date] = None,
 ) -> dict[str, dict]:
     """Compute metrics for multiple interval presets at once.

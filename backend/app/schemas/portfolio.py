@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -52,7 +52,19 @@ class BacktestConfigSchema(BaseModel):
         10_000_000.0, gt=0, description="Starting capital (CNY)"
     )
     rebalance_frequency: str = Field("monthly")
-    history_mode: str = Field(
+    transaction_cost_bps: float = Field(
+        0.0, ge=0.0,
+        description="One-way transaction cost in basis points (e.g. 10 = 0.10%)",
+    )
+    freq_align_method: Literal["downsample", "interpolate"] = Field(
+        "downsample",
+        description="Frequency alignment: 'downsample' (to weekly) or 'interpolate' (to daily)",
+    )
+    risk_free_rate: float = Field(
+        0.02,
+        description="Annual risk-free rate for Sharpe/Sortino (default 2%)",
+    )
+    history_mode: Literal["intersection", "dynamic_entry", "truncate"] = Field(
         "intersection",
         description=(
             "How to handle funds with different history lengths: "
