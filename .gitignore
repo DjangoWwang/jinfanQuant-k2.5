@@ -50,3 +50,8 @@ coverage/
 # Data (private)
 data/
 uploads/
+
+# Temp scripts and screenshots
+scripts/*.js
+scripts/*.png
+scripts/*.json
