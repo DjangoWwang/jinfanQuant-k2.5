@@ -35,8 +35,8 @@ class FundUpdate(BaseModel):
 
 
 class FundListParams(BaseModel):
-    strategy_type: str | None = None
-    strategy_sub: str | None = None
+    strategy_types: list[str] | None = None  # 多选一级策略
+    strategy_subs: list[str] | None = None   # 多选二级策略
     nav_frequency: str | None = None
     search: str | None = None
     page: int = Field(1, ge=1)

@@ -4,9 +4,12 @@ from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.fund import Fund
+from app.models.strategy import StrategyCategory
 from app.schemas.fund import (
     FundCreate, FundUpdate, FundResponse, FundListResponse,
     FundListParams, NavHistoryResponse, NavRecord, MetricsResponse,
@@ -17,19 +20,93 @@ from app.engine.metrics import calc_all_metrics
 router = APIRouter(prefix="/funds", tags=["funds"])
 
 
+# ------------------------------------------------------------------
+# 策略分类
+# ------------------------------------------------------------------
+
+@router.get("/strategy-categories")
+async def get_strategy_categories(db: AsyncSession = Depends(get_db)):
+    """获取数据库中实际存在的策略分类及基金数量（从funds表聚合）。
+
+    返回树状结构: [{strategy_type, total, subs: [{name, count}]}]
+    """
+    query = (
+        select(
+            Fund.strategy_type,
+            Fund.strategy_sub,
+            func.count(Fund.id).label("count"),
+        )
+        .where(Fund.status == "active")
+        .group_by(Fund.strategy_type, Fund.strategy_sub)
+        .order_by(func.count(Fund.id).desc())
+    )
+    result = await db.execute(query)
+    rows = result.all()
+
+    tree: dict = {}
+    for row in rows:
+        st = row.strategy_type or "未分类"
+        ss = row.strategy_sub or ""
+        cnt = row.count
+        if st not in tree:
+            tree[st] = {"subs": [], "total": 0}
+        tree[st]["total"] += cnt
+        if ss:
+            tree[st]["subs"].append({"name": ss, "count": cnt})
+
+    categories = []
+    for st, info in sorted(tree.items(), key=lambda x: -x[1]["total"]):
+        categories.append({
+            "strategy_type": st,
+            "total": info["total"],
+            "subs": sorted(info["subs"], key=lambda x: -x["count"]),
+        })
+    return categories
+
+
+@router.get("/strategy-tree")
+async def get_strategy_tree(db: AsyncSession = Depends(get_db)):
+    """获取自定义策略分类树（strategy_categories表，可编辑）。"""
+    query = (
+        select(StrategyCategory)
+        .where(StrategyCategory.is_active.is_(True))
+        .order_by(StrategyCategory.level, StrategyCategory.sort_order)
+    )
+    result = await db.execute(query)
+    nodes = list(result.scalars().all())
+
+    node_map = {n.id: {"id": n.id, "name": n.name, "level": n.level, "parent_id": n.parent_id, "children": []} for n in nodes}
+    roots = []
+    for n in nodes:
+        item = node_map[n.id]
+        if n.parent_id and n.parent_id in node_map:
+            node_map[n.parent_id]["children"].append(item)
+        else:
+            roots.append(item)
+    return roots
+
+
+# ------------------------------------------------------------------
+# 基金列表 (支持多选策略筛选)
+# ------------------------------------------------------------------
+
 @router.get("/", response_model=FundListResponse)
 async def list_funds(
-    strategy_type: Optional[str] = Query(None),
-    strategy_sub: Optional[str] = Query(None),
+    strategy_type: Optional[str] = Query(None, description="逗号分隔多选，如: 股票类,期货策略"),
+    strategy_sub: Optional[str] = Query(None, description="逗号分隔多选，如: 主观多头,量化期货"),
     nav_frequency: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
+    # 逗号分隔转列表
+    strategy_types = [s.strip() for s in strategy_type.split(",") if s.strip()] if strategy_type else None
+    strategy_subs = [s.strip() for s in strategy_sub.split(",") if s.strip()] if strategy_sub else None
+
     params = FundListParams(
-        strategy_type=strategy_type,
-        strategy_sub=strategy_sub,
+        strategy_types=strategy_types,
+        strategy_subs=strategy_subs,
         nav_frequency=nav_frequency,
         search=search,
         page=page,
@@ -43,6 +120,10 @@ async def list_funds(
         items=[FundResponse.model_validate(f) for f in funds],
     )
 
+
+# ------------------------------------------------------------------
+# 单只基金 CRUD
+# ------------------------------------------------------------------
 
 @router.get("/{fund_id}", response_model=FundResponse)
 async def get_fund(fund_id: int, db: AsyncSession = Depends(get_db)):
@@ -77,6 +158,10 @@ async def delete_fund(fund_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(404, "基金不存在")
     await db.commit()
 
+
+# ------------------------------------------------------------------
+# 净值与指标
+# ------------------------------------------------------------------
 
 @router.get("/{fund_id}/nav", response_model=NavHistoryResponse)
 async def get_nav_history(

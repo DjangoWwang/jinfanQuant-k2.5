@@ -7,6 +7,7 @@ from app.models.portfolio import Portfolio, PortfolioAllocation, BacktestResult
 from app.models.product import Product, ValuationSnapshot, ValuationItem
 from app.models.calendar import TradingCalendar
 from app.models.scrape import DataSource, ScrapeJob
+from app.models.strategy import StrategyCategory
 
 __all__ = [
     "Fund",
@@ -25,4 +26,5 @@ __all__ = [
     "TradingCalendar",
     "DataSource",
     "ScrapeJob",
+    "StrategyCategory",
 ]

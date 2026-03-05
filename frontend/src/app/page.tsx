@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   TrendingUp,
   TrendingDown,
@@ -7,6 +9,10 @@ import {
   ArrowDownRight,
   BarChart3,
   Activity,
+  Database,
+  GitCompare,
+  Briefcase,
+  Loader2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,8 +25,24 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { fetchApi } from "@/lib/api";
 
-/* ─── Mock Data ─── */
+/* --- Types --- */
+
+interface FundStats {
+  total: number;
+  daily_count: number;
+  weekly_count: number;
+  strategy_breakdown: { strategy_type: string; count: number }[];
+}
+
+interface PoolCounts {
+  basic: number;
+  watch: number;
+  investment: number;
+}
+
+/* --- Mock Data (Phase 4 产品运营接入后替换) --- */
 
 const productSummary = {
   name: "博孚利鹭岛晋帆FOF",
@@ -52,7 +74,7 @@ const watchAlerts = [
   { name: "衍复CTA精选3期", change: "-0.45%", reason: "回撤接近-5%阈值", positive: false },
 ];
 
-/* ─── Metric Cell ─── */
+/* --- Helpers --- */
 
 function MetricCell({ label, value, sub, up }: { label: string; value: string; sub?: string; up?: boolean }) {
   return (
@@ -69,18 +91,73 @@ function MetricCell({ label, value, sub, up }: { label: string; value: string; s
   );
 }
 
-/* ─── Page ─── */
+/* --- Page --- */
 
 export default function DashboardPage() {
+  const router = useRouter();
+  const [fundStats, setFundStats] = useState<FundStats | null>(null);
+  const [poolCounts, setPoolCounts] = useState<PoolCounts | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    Promise.allSettled([
+      fetchApi<{ total: number; items: Array<{ nav_frequency: string; strategy_type: string | null }> }>("/funds/?page=1&page_size=1")
+        .then(res => {
+          // 用总数，但需要单独查频率分布
+          return fetchApi<Array<{ strategy_type: string; total: number }>>("/funds/strategy-categories")
+            .then(cats => {
+              const total = cats.reduce((sum, c) => sum + c.total, 0);
+              return {
+                total: res.total || total,
+                daily_count: 0,
+                weekly_count: 0,
+                strategy_breakdown: cats.map(c => ({ strategy_type: c.strategy_type, count: c.total })),
+              } as FundStats;
+            });
+        }),
+      fetchApi<PoolCounts>("/pools/counts"),
+    ]).then(([statsResult, poolsResult]) => {
+      if (statsResult.status === "fulfilled") setFundStats(statsResult.value);
+      if (poolsResult.status === "fulfilled") setPoolCounts(poolsResult.value);
+      setLoading(false);
+    });
+  }, []);
+
   return (
     <div className="space-y-3">
       <PageHeader title="概览" description={`数据截至 ${productSummary.navDate}`} />
 
-      {/* Product Summary Strip */}
+      {/* 快捷入口 */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {[
+          { label: "基金数据库", icon: Database, href: "/fund-database", count: fundStats?.total ?? "—", sub: "只基金" },
+          { label: "基金比较", icon: GitCompare, href: "/fund-research/comparison", count: "—", sub: "对比分析" },
+          { label: "基金池", icon: Briefcase, href: "/fund-research/pools", count: poolCounts ? `${poolCounts.watch + poolCounts.investment}` : "—", sub: "关注中" },
+          { label: "策略分类", icon: BarChart3, href: "/fund-database", count: fundStats?.strategy_breakdown?.length ?? "—", sub: "个策略" },
+        ].map(item => (
+          <button
+            key={item.label}
+            onClick={() => router.push(item.href)}
+            className="bg-card border border-border rounded px-4 py-3 text-left hover:border-primary/30 hover:shadow-sm transition-all group"
+          >
+            <div className="flex items-center justify-between mb-1.5">
+              <item.icon className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
+              <span className="text-[10px] text-muted-foreground">{item.sub}</span>
+            </div>
+            <div className="text-xl font-bold tabular-nums">
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : item.count}
+            </div>
+            <div className="text-[11px] text-muted-foreground mt-0.5">{item.label}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* Product Summary Strip (Mock - Phase 4 接入) */}
       <div className="bg-card border border-border rounded">
         <div className="flex items-center border-b border-border px-4 py-1.5">
           <span className="text-[13px] font-semibold">{productSummary.name}</span>
           <Badge className="ml-2 text-[10px] bg-primary/10 text-primary border-primary/20 hover:bg-primary/10">实盘</Badge>
+          <span className="ml-auto text-[10px] text-muted-foreground">示例数据 - 待接入估值表</span>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 divide-x divide-border">
           <MetricCell label="最新净值" value={productSummary.nav.toFixed(4)} sub={`${(productSummary.dailyReturn * 100).toFixed(2)}%`} up={productSummary.dailyReturn > 0} />
@@ -89,7 +166,11 @@ export default function DashboardPage() {
           <MetricCell label="今年以来" value={`${(productSummary.ytdReturn * 100).toFixed(2)}%`} up={productSummary.ytdReturn > 0} />
           <MetricCell label="最大回撤" value={`${(productSummary.maxDrawdown * 100).toFixed(2)}%`} />
           <MetricCell label="夏普比率" value={productSummary.sharpe.toFixed(2)} />
-          <MetricCell label="基金入库" value="128只" sub="日频96 / 周频32" />
+          <MetricCell
+            label="基金入库"
+            value={loading ? "..." : `${fundStats?.total ?? 0}只`}
+            sub={poolCounts ? `观察${poolCounts.watch} / 投资${poolCounts.investment}` : undefined}
+          />
         </div>
       </div>
 
@@ -108,18 +189,18 @@ export default function DashboardPage() {
         <div className="h-48 flex items-center justify-center text-muted-foreground">
           <div className="text-center space-y-1">
             <BarChart3 className="mx-auto h-7 w-7 opacity-25" />
-            <p className="text-[12px] opacity-60">接入数据后展示净值走势图</p>
+            <p className="text-[12px] opacity-60">Phase 4 接入估值表后展示净值走势图</p>
           </div>
         </div>
       </div>
 
       {/* Holdings + Alerts */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-        {/* Holdings Table */}
+        {/* Holdings Table (Mock) */}
         <div className="lg:col-span-2 bg-card border border-border rounded">
           <div className="flex items-center justify-between px-4 py-1.5 border-b border-border">
             <span className="text-[13px] font-medium">子基金持仓</span>
-            <span className="text-[11px] text-muted-foreground">{subFunds.length} 只</span>
+            <span className="text-[11px] text-muted-foreground">{subFunds.length} 只 (示例)</span>
           </div>
           <Table>
             <TableHeader>
@@ -169,6 +250,27 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* 策略分布 (真实数据) */}
+      {fundStats?.strategy_breakdown && fundStats.strategy_breakdown.length > 0 && (
+        <div className="bg-card border border-border rounded">
+          <div className="px-4 py-1.5 border-b border-border">
+            <span className="text-[13px] font-medium">策略分布</span>
+          </div>
+          <div className="px-4 py-3 flex flex-wrap gap-2">
+            {fundStats.strategy_breakdown.map(s => (
+              <div
+                key={s.strategy_type}
+                className="flex items-center gap-2 px-3 py-1.5 bg-muted/50 rounded text-[12px] hover:bg-muted transition-colors cursor-pointer"
+                onClick={() => router.push(`/fund-database?strategy_type=${encodeURIComponent(s.strategy_type)}`)}
+              >
+                <span className="font-medium">{s.strategy_type}</span>
+                <span className="text-muted-foreground tabular-nums">{s.count}只</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

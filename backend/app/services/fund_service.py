@@ -40,10 +40,10 @@ class FundService:
     ) -> tuple[list[Fund], int]:
         query = select(Fund).where(Fund.status == "active")
 
-        if params.strategy_type:
-            query = query.where(Fund.strategy_type == params.strategy_type)
-        if params.strategy_sub:
-            query = query.where(Fund.strategy_sub == params.strategy_sub)
+        if params.strategy_types:
+            query = query.where(Fund.strategy_type.in_(params.strategy_types))
+        if params.strategy_subs:
+            query = query.where(Fund.strategy_sub.in_(params.strategy_subs))
         if params.nav_frequency:
             query = query.where(Fund.nav_frequency == params.nav_frequency)
         if params.search:
