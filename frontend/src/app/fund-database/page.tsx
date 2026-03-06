@@ -2,7 +2,8 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Search, Download, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, Loader2 } from "lucide-react";
+import { Search, Download, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown, Loader2, FlaskConical } from "lucide-react";
+import Link from "next/link";
 import { PageHeader } from "@/components/layout/page-header";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -194,6 +195,11 @@ export default function FundDatabasePage() {
         description={data ? `共 ${data.total} 只基金` : "加载中..."}
         actions={
           <div className="flex gap-1.5">
+            <Link href="/fund-research/portfolio/create">
+              <Button variant="outline" size="sm" className="h-7 text-[12px] gap-1 border-primary/30 text-primary hover:bg-primary/5">
+                <FlaskConical className="h-3 w-3" />组合回测
+              </Button>
+            </Link>
             <Button variant="outline" size="sm" className="h-7 text-[12px] gap-1">
               <Download className="h-3 w-3" />导出
             </Button>

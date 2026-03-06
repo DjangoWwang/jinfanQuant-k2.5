@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.fund import Fund, NavHistory
+from app.models.benchmark import Benchmark, IndexNav
 from app.models.portfolio import Portfolio, PortfolioAllocation
 from app.models.portfolio import BacktestResult as BacktestResultModel
 from app.schemas.portfolio import BacktestConfigSchema, PortfolioWeight
@@ -33,15 +34,121 @@ def _build_nav_and_drawdown(nav_series: dict[str, float]):
     return nav_list, drawdown_list
 
 
-async def _get_nav_series(
+async def _get_fund_nav_series(
     db: AsyncSession,
     fund_id: int,
     start_date: date,
     end_date: date,
 ) -> pd.Series:
     """从数据库获取基金NAV序列。"""
-    series = await fund_service.get_nav_series(db, fund_id, start_date, end_date)
-    return series
+    return await fund_service.get_nav_series(db, fund_id, start_date, end_date)
+
+
+async def _get_index_nav_series(
+    db: AsyncSession,
+    index_code: str,
+    start_date: date,
+    end_date: date,
+) -> pd.Series:
+    """从数据库获取指数NAV序列。"""
+    result = await db.execute(
+        select(IndexNav.nav_date, IndexNav.nav_value)
+        .where(IndexNav.index_code == index_code)
+        .where(IndexNav.nav_date >= start_date)
+        .where(IndexNav.nav_date <= end_date)
+        .order_by(IndexNav.nav_date)
+    )
+    rows = result.all()
+    if not rows:
+        return pd.Series(dtype=float)
+    dates = [r[0] for r in rows]
+    vals = [float(r[1]) for r in rows if r[1] is not None]
+    if len(vals) != len(dates):
+        pairs = [(r[0], float(r[1])) for r in rows if r[1] is not None]
+        if not pairs:
+            return pd.Series(dtype=float)
+        dates, vals = zip(*pairs)
+    return pd.Series(vals, index=pd.DatetimeIndex(dates), name=f"idx_{index_code}")
+
+
+@router.get("/search-assets")
+async def search_assets(
+    q: str = Query("", description="搜索关键词（名称/代码/管理人）"),
+    asset_type: str = Query("", description="资产类型过滤: fund / index / 空=全部"),
+    limit: int = Query(15, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+):
+    """统一搜索可用于回测的资产（基金 + 指数/ETF）。
+
+    返回统一格式，前端可直接展示和添加到组合。
+    支持 asset_type 过滤，避免混合结果被截断。
+    """
+    from sqlalchemy import or_
+
+    results = []
+
+    # 搜索基金
+    if asset_type != "index":
+        fund_query = (
+            select(Fund)
+            .where(Fund.status == "active")
+            .order_by(Fund.id)
+            .limit(limit)
+        )
+        if q:
+            pattern = f"%{q}%"
+            fund_query = fund_query.where(
+                or_(
+                    Fund.fund_name.ilike(pattern),
+                    Fund.filing_number.ilike(pattern),
+                    Fund.manager_name.ilike(pattern),
+                )
+            )
+        fund_result = await db.execute(fund_query)
+        for f in fund_result.scalars().all():
+            results.append({
+                "asset_type": "fund",
+                "asset_id": f"fund_{f.id}",
+                "fund_id": f.id,
+                "index_code": None,
+                "name": f.fund_name,
+                "sub_label": f.manager_name or "",
+                "strategy": f"{f.strategy_type or ''}{('·' + f.strategy_sub) if f.strategy_sub else ''}",
+                "frequency": f.nav_frequency or "daily",
+                "latest_nav": float(f.latest_nav) if f.latest_nav else None,
+            })
+
+    # 搜索指数
+    if asset_type != "fund":
+        idx_query = (
+            select(Benchmark)
+            .where(Benchmark.is_active.is_not(False))
+            .order_by(Benchmark.index_code)
+            .limit(limit)
+        )
+        if q:
+            pattern = f"%{q}%"
+            idx_query = idx_query.where(
+                or_(
+                    Benchmark.index_name.ilike(pattern),
+                    Benchmark.index_code.ilike(pattern),
+                )
+            )
+        idx_result = await db.execute(idx_query)
+        for b in idx_result.scalars().all():
+            results.append({
+                "asset_type": "index",
+                "asset_id": f"idx_{b.index_code}",
+                "fund_id": None,
+                "index_code": b.index_code,
+                "name": b.index_name,
+                "sub_label": b.category or "",
+                "strategy": "",
+                "frequency": "daily",
+                "latest_nav": None,
+            })
+
+    return results[:limit]
 
 
 @router.post("/run")
@@ -55,11 +162,12 @@ async def run_backtest(
     1. portfolio_id — 从已保存的组合获取权重
     2. inline weights — 直接传入权重（快速回测，不保存组合）
     """
-    # 解析权重
-    weights_map: dict[int, float] = {}
+    # 解析权重: 支持 fund_id(基金) 和 index_code(指数/ETF) 两种资产
+    # key格式: "fund_123" 或 "idx_000300"
+    weights_map: dict[str, float] = {}
 
     if req.portfolio_id:
-        # 从组合获取权重
+        # 从组合获取权重 (目前只支持基金)
         alloc_result = await db.execute(
             select(PortfolioAllocation)
             .where(PortfolioAllocation.portfolio_id == req.portfolio_id)
@@ -67,9 +175,15 @@ async def run_backtest(
         allocs = list(alloc_result.scalars().all())
         if not allocs:
             raise HTTPException(404, "组合不存在或无权重配置")
-        weights_map = {a.fund_id: float(a.target_weight) for a in allocs}
+        weights_map = {f"fund_{a.fund_id}": float(a.target_weight) for a in allocs}
     elif req.weights:
-        weights_map = {w.fund_id: w.weight for w in req.weights}
+        for w in req.weights:
+            if w.fund_id is not None:
+                weights_map[f"fund_{w.fund_id}"] = w.weight
+            elif w.index_code is not None:
+                weights_map[f"idx_{w.index_code}"] = w.weight
+            else:
+                raise HTTPException(400, "每个权重项必须指定 fund_id 或 index_code")
     else:
         raise HTTPException(400, "需要提供 portfolio_id 或 weights")
 
@@ -81,28 +195,39 @@ async def run_backtest(
     if not trading_days:
         raise HTTPException(400, "所选日期范围内无交易日")
 
-    # 获取各基金NAV序列
+    # 获取各资产NAV序列 (基金 + 指数)
     nav_dict: dict[str, pd.Series] = {}
     fund_names: dict[str, str] = {}
     missing_funds = []
 
-    for fund_id in weights_map:
-        series = await _get_nav_series(db, fund_id, req.start_date, req.end_date)
-        if series.empty:
-            # 查基金名
+    for asset_key in weights_map:
+        if asset_key.startswith("fund_"):
+            fund_id = int(asset_key.split("_", 1)[1])
+            series = await _get_fund_nav_series(db, fund_id, req.start_date, req.end_date)
+            if series.empty:
+                fund_result = await db.execute(select(Fund.fund_name).where(Fund.id == fund_id))
+                name = fund_result.scalar_one_or_none() or f"#{fund_id}"
+                missing_funds.append(name)
+                continue
+            nav_dict[asset_key] = series
             fund_result = await db.execute(select(Fund.fund_name).where(Fund.id == fund_id))
-            name = fund_result.scalar_one_or_none() or f"#{fund_id}"
-            missing_funds.append(name)
-            continue
-        key = str(fund_id)
-        nav_dict[key] = series
-        fund_result = await db.execute(select(Fund.fund_name).where(Fund.id == fund_id))
-        fund_names[key] = fund_result.scalar_one_or_none() or f"#{fund_id}"
+            fund_names[asset_key] = fund_result.scalar_one_or_none() or f"#{fund_id}"
+        elif asset_key.startswith("idx_"):
+            index_code = asset_key.split("_", 1)[1]
+            series = await _get_index_nav_series(db, index_code, req.start_date, req.end_date)
+            if series.empty:
+                bm_result = await db.execute(select(Benchmark.index_name).where(Benchmark.index_code == index_code))
+                name = bm_result.scalar_one_or_none() or index_code
+                missing_funds.append(name)
+                continue
+            nav_dict[asset_key] = series
+            bm_result = await db.execute(select(Benchmark.index_name).where(Benchmark.index_code == index_code))
+            fund_names[asset_key] = bm_result.scalar_one_or_none() or index_code
 
     if missing_funds and req.history_mode == "intersection":
         raise HTTPException(
             400,
-            f"以下基金在回测区间内无净值数据: {', '.join(missing_funds)}"
+            f"以下资产在回测区间内无净值数据: {', '.join(missing_funds)}"
         )
 
     # 构造引擎配置 — use schema fields, not hardcoded values
@@ -116,8 +241,8 @@ async def run_backtest(
         history_mode=req.history_mode,
     )
 
-    # 转换权重key为字符串
-    str_weights = {str(k): v for k, v in weights_map.items()}
+    # weights_map keys are already strings like "fund_123" or "idx_000300"
+    str_weights = weights_map
 
     # 执行回测
     engine = BacktestEngine()

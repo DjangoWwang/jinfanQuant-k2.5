@@ -28,8 +28,8 @@ class PortfolioAllocation(Base):
     __tablename__ = "portfolio_allocations"
     __table_args__ = (
         UniqueConstraint(
-            "portfolio_id", "fund_id", "effective_date",
-            name="uq_portfolio_alloc_fund_date",
+            "portfolio_id", "fund_id", "index_code", "effective_date",
+            name="uq_portfolio_alloc_asset_date",
         ),
     )
 
@@ -37,7 +37,8 @@ class PortfolioAllocation(Base):
     portfolio_id = Column(
         Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False
     )
-    fund_id = Column(Integer, ForeignKey("funds.id"), nullable=False)
+    fund_id = Column(Integer, ForeignKey("funds.id"), nullable=True)
+    index_code = Column(String(50), nullable=True)
     target_weight = Column(Numeric(8, 6), nullable=False)
     effective_date = Column(Date, nullable=False)
 

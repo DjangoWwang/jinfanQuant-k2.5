@@ -190,7 +190,7 @@ async def get_fund_metrics(
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
     preset: Optional[str] = Query(None, description="ytd, 1y, 3y, inception..."),
-    risk_free_rate: float = Query(0.025),
+    risk_free_rate: float = Query(0.02),
     db: AsyncSession = Depends(get_db),
 ):
     fund = await fund_service.get_fund(db, fund_id)

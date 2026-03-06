@@ -96,10 +96,11 @@ def calc_annualized_return(
     # fractional exponentiation produce complex numbers.
     if base <= 0:
         return -1.0
-    # For negative returns use sign-preserving formula:
-    # -((1 / base)^exp - 1) when base < 1 would give negative result anyway,
-    # but standard formula works fine as long as base > 0.
+    # Guard against blow-up: when very few data points (e.g. 2-3 NAVs),
+    # exp can be huge (365/1=365), making 1.05^365 astronomical.
+    # Cap the annualized return at +/- 9999% (ratio ±99.99).
     ann = base ** exp - 1
+    ann = max(min(ann, 99.99), -0.9999)
     return float(ann)
 
 

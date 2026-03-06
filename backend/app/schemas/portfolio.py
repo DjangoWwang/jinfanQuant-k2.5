@@ -13,9 +13,14 @@ from pydantic import BaseModel, Field
 # ------------------------------------------------------------------
 
 class PortfolioWeight(BaseModel):
-    """A single fund weight within a portfolio."""
+    """A single asset weight within a portfolio.
 
-    fund_id: int
+    Supports both funds (fund_id) and indices/ETFs (index_code).
+    Exactly one of fund_id or index_code must be set.
+    """
+
+    fund_id: int | None = Field(None, description="Fund ID (for private funds)")
+    index_code: str | None = Field(None, description="Index code (for indices/ETFs, e.g. '000300')")
     weight: float = Field(..., ge=0.0, le=1.0, description="Allocation weight (0-1)")
 
 

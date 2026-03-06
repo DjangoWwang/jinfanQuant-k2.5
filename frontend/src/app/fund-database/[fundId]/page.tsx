@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
-import { ArrowLeft, Loader2, Calendar, TrendingUp, TrendingDown, Activity, BarChart3 } from "lucide-react";
+import { ArrowLeft, Loader2, Calendar, TrendingUp, TrendingDown, Activity, BarChart3, FlaskConical } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { fetchApi } from "@/lib/api";
@@ -61,14 +61,19 @@ interface Metrics {
 /* ─── Helpers ─── */
 
 function pct(v: number | null | undefined, digits = 2): string {
-  if (v == null) return "—";
-  const s = (v * 100).toFixed(digits);
-  return v >= 0 ? `+${s}%` : `${s}%`;
+  if (v == null || !isFinite(v)) return "—";
+  // Cap display at ±9999% to avoid astronomical numbers from short-history funds
+  const capped = Math.max(Math.min(v, 99.99), -9.999);
+  const s = (capped * 100).toFixed(digits);
+  const display = capped >= 0 ? `+${s}%` : `${s}%`;
+  return Math.abs(v) > 99.99 ? `${display}*` : display;
 }
 
 function num(v: number | null | undefined, digits = 2): string {
-  if (v == null) return "—";
-  return v.toFixed(digits);
+  if (v == null || !isFinite(v)) return "—";
+  // Cap ratios at ±999.99 for display
+  const capped = Math.max(Math.min(v, 999.99), -999.99);
+  return capped.toFixed(digits);
 }
 
 /** 计算回撤序列 */
@@ -279,6 +284,15 @@ export default function FundDetailPage() {
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="sm" className="gap-1 text-[12px] h-7" onClick={() => router.back()}>
           <ArrowLeft className="h-3.5 w-3.5" />返回列表
+        </Button>
+        <div className="flex-1" />
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5 text-[12px] h-7 border-primary/30 text-primary hover:bg-primary/5"
+          onClick={() => router.push(`/fund-research/portfolio/create?addFund=${fundId}&fundName=${encodeURIComponent(fund.fund_name)}&freq=${fund.nav_frequency}`)}
+        >
+          <FlaskConical className="h-3.5 w-3.5" />加入组合回测
         </Button>
       </div>
 
