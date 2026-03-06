@@ -1,29 +1,190 @@
-from fastapi import APIRouter
+"""Product management API endpoints (CRUD + valuation upload)."""
+
+import tempfile
+from datetime import date
+from pathlib import Path
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.schemas.product import (
+    ProductCreate,
+    ProductUpdate,
+    ProductResponse,
+    ProductListResponse,
+    ValuationUploadResponse,
+    ValuationSnapshotResponse,
+    ValuationListResponse,
+    ProductNavResponse,
+)
+from app.services.product_service import product_service
 
 router = APIRouter(prefix="/products", tags=["products"])
 
 
-@router.get("/")
-def list_products():
-    return {
-        "items": [
-            {"product_id": "PRD001", "product_name": "晋帆FOF1号", "status": "运行中", "inception_date": "2023-06-01"},
-            {"product_id": "PRD002", "product_name": "晋帆FOF2号", "status": "募集中", "inception_date": "2024-01-15"},
-        ]
-    }
+# ------------------------------------------------------------------
+# Product CRUD
+# ------------------------------------------------------------------
+
+@router.get("/", response_model=ProductListResponse)
+async def list_products(
+    product_type: Optional[str] = Query(None, description="live or simulation"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    skip = (page - 1) * page_size
+    products, total = await product_service.list_products(
+        db, product_type=product_type, skip=skip, limit=page_size
+    )
+    items = [await product_service.to_response(db, p) for p in products]
+    return ProductListResponse(items=items, total=total)
 
 
-@router.get("/{product_id}")
-def product_detail(product_id: str):
-    return {
-        "product_id": product_id,
-        "product_name": "晋帆FOF1号",
-        "status": "运行中",
-        "inception_date": "2023-06-01",
-        "latest_nav": 1.1234,
-        "total_aum": 50000000.0,
-        "holdings": [
-            {"fund_id": "F001", "fund_name": "示例基金A", "weight": 0.4},
-            {"fund_id": "F002", "fund_name": "示例基金B", "weight": 0.6},
-        ],
-    }
+@router.post("/", response_model=ProductResponse, status_code=201)
+async def create_product(
+    payload: ProductCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    product = await product_service.create_product(db, payload)
+    await db.commit()
+    resp = await product_service.to_response(db, product)
+    return resp
+
+
+@router.get("/{product_id}", response_model=ProductResponse)
+async def get_product(
+    product_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    product = await product_service.get_product(db, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    return await product_service.to_response(db, product)
+
+
+@router.patch("/{product_id}", response_model=ProductResponse)
+async def update_product(
+    product_id: int,
+    payload: ProductUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    product = await product_service.update_product(db, product_id, payload)
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    await db.commit()
+    return await product_service.to_response(db, product)
+
+
+@router.delete("/{product_id}", status_code=204)
+async def delete_product(
+    product_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    ok = await product_service.delete_product(db, product_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    await db.commit()
+
+
+# ------------------------------------------------------------------
+# Valuation upload & query
+# ------------------------------------------------------------------
+
+@router.post("/{product_id}/valuation", response_model=ValuationUploadResponse)
+async def upload_valuation(
+    product_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload and parse a custodian valuation table Excel file."""
+    product = await product_service.get_product(db, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+
+    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx/.xls 格式")
+
+    # Save to temp file for openpyxl parsing
+    suffix = Path(file.filename).suffix
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        result = await product_service.process_valuation_upload(
+            db, product_id, tmp_path
+        )
+        await db.commit()
+        return result
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+@router.get("/{product_id}/valuations", response_model=ValuationListResponse)
+async def list_valuations(
+    product_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    product = await product_service.get_product(db, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+
+    skip = (page - 1) * page_size
+    items, total = await product_service.list_valuations(
+        db, product_id, skip=skip, limit=page_size
+    )
+    return ValuationListResponse(items=items, total=total)
+
+
+@router.get("/{product_id}/valuation/latest", response_model=ValuationSnapshotResponse)
+async def get_latest_valuation(
+    product_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await product_service.get_latest_valuation(db, product_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="无估值数据")
+    return result
+
+
+@router.get("/{product_id}/valuation/{snapshot_id}", response_model=ValuationSnapshotResponse)
+async def get_valuation_snapshot(
+    product_id: int,
+    snapshot_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await product_service.get_valuation_snapshot(db, snapshot_id)
+    if not result or result.product_id != product_id:
+        raise HTTPException(status_code=404, detail="估值快照不存在")
+    return result
+
+
+# ------------------------------------------------------------------
+# NAV series
+# ------------------------------------------------------------------
+
+@router.get("/{product_id}/nav", response_model=ProductNavResponse)
+async def get_product_nav(
+    product_id: int,
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    product = await product_service.get_product(db, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+
+    nav_series = await product_service.get_nav_series(
+        db, product_id, start_date, end_date
+    )
+    return ProductNavResponse(
+        product_id=product_id,
+        product_name=product.product_name,
+        nav_series=nav_series,
+    )

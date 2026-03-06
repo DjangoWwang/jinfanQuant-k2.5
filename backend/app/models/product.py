@@ -1,7 +1,8 @@
 from sqlalchemy import (
-    Column, Integer, String, Boolean, Date, DateTime,
+    Column, Integer, String, Boolean, Date, DateTime, Text,
     Numeric, SmallInteger, ForeignKey, UniqueConstraint,
 )
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -14,9 +15,19 @@ class Product(Base):
     product_name = Column(String(200), nullable=False)
     product_code = Column(String(50), nullable=True)
     custodian = Column(String(100), nullable=True)
-    product_type = Column(String(20), default="live")
+    administrator = Column(String(100), nullable=True)
+    product_type = Column(String(20), default="live")  # live / simulation
+    inception_date = Column(Date, nullable=True)
+    total_shares = Column(Numeric(16, 4), nullable=True)
+    management_fee_rate = Column(Numeric(6, 4), default=0)
+    performance_fee_rate = Column(Numeric(6, 4), default=0)
+    high_watermark = Column(Numeric(12, 6), nullable=True)
+    linked_portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=True)
+    notes = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    snapshots = relationship("ValuationSnapshot", back_populates="product", lazy="selectin")
 
 
 class ValuationSnapshot(Base):
@@ -37,6 +48,9 @@ class ValuationSnapshot(Base):
     total_shares = Column(Numeric(16, 4), nullable=True)
     source_file = Column(String(500), nullable=True)
     imported_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    product = relationship("Product", back_populates="snapshots")
+    items = relationship("ValuationItem", back_populates="snapshot", lazy="selectin", cascade="all, delete-orphan")
 
 
 class ValuationItem(Base):
@@ -61,3 +75,5 @@ class ValuationItem(Base):
     value_diff = Column(Numeric(16, 2), nullable=True)
     linked_fund_id = Column(Integer, ForeignKey("funds.id"), nullable=True)
     remark = Column(String(200), nullable=True)
+
+    snapshot = relationship("ValuationSnapshot", back_populates="items")
