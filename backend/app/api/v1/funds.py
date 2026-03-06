@@ -199,7 +199,10 @@ async def get_fund_metrics(
 
     if preset and not start_date:
         from app.engine.metrics import interval_dates
-        start_date, end_date = interval_dates(preset)
+        try:
+            start_date, end_date = interval_dates(preset)
+        except ValueError:
+            raise HTTPException(400, f"无效的区间预设: {preset}")
 
     series = await fund_service.get_nav_series(db, fund_id, start_date, end_date)
     if series.empty:

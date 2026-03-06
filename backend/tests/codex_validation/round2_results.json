@@ -1,0 +1,249 @@
+{
+  "round": 2,
+  "date": "2026-03-07",
+  "total": 40,
+  "passed": 38,
+  "failed": 2,
+  "details": [
+    {
+      "category": "backtest_extreme",
+      "test": "A.1-单基金退化",
+      "status": "FAIL",
+      "details": "回测=0.0811, 基金=0.1023, diff=0.0212"
+    },
+    {
+      "category": "backtest_extreme",
+      "test": "A.2-单指数",
+      "status": "PASS",
+      "details": "沪深300 2024: ret=0.1648"
+    },
+    {
+      "category": "backtest_extreme",
+      "test": "A.3-极短区间",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "category": "backtest_extreme",
+      "test": "A.4-极长区间",
+      "status": "PASS",
+      "details": "nav_series=2429条"
+    },
+    {
+      "category": "backtest_extreme",
+      "test": "A.5-极多资产",
+      "status": "PASS",
+      "details": "7资产回测 ret=0.1698"
+    },
+    {
+      "category": "backtest_extreme",
+      "test": "A.6-不均匀权重",
+      "status": "PASS",
+      "details": "99%+1%组合 ret=0.2535"
+    },
+    {
+      "category": "backtest_extreme",
+      "test": "A.7-高成本拖累",
+      "status": "FAIL",
+      "details": "无成本=-0.0347, 100bps日频=-0.0445, 拖累=0.0098"
+    },
+    {
+      "category": "backtest_extreme",
+      "test": "A.8-ds vs ip",
+      "status": "PASS",
+      "details": "downsample=0.0715, interpolate=0.0715, diff=0.0000"
+    },
+    {
+      "category": "data_edge",
+      "test": "B.1-interleaved-874",
+      "status": "PASS",
+      "details": "ret=0.4870"
+    },
+    {
+      "category": "data_edge",
+      "test": "B.1-interleaved-882",
+      "status": "PASS",
+      "details": "ret=0.1280"
+    },
+    {
+      "category": "data_edge",
+      "test": "B.2-sparse-984",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "category": "data_edge",
+      "test": "B.2-sparse-475",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "category": "data_edge",
+      "test": "B.3-jumpy-466",
+      "status": "PASS",
+      "details": "max_dd=-0.9720"
+    },
+    {
+      "category": "data_edge",
+      "test": "B.3-jumpy-623",
+      "status": "PASS",
+      "details": "max_dd=-0.6596"
+    },
+    {
+      "category": "data_edge",
+      "test": "B.4-few-363(9条)",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "category": "data_edge",
+      "test": "B.4-few-697(9条)",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "category": "data_edge",
+      "test": "B.4-few-698(9条)",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "category": "data_edge",
+      "test": "B.5-highNAV-1218",
+      "status": "PASS",
+      "details": "max_nav=15006.34, ret=7.1711"
+    },
+    {
+      "category": "data_edge",
+      "test": "B.5-highNAV-1217",
+      "status": "PASS",
+      "details": "max_nav=11545.89, ret=7.3092"
+    },
+    {
+      "category": "data_edge",
+      "test": "B.6-lowNAV-466(min=0.0334)",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "category": "data_edge",
+      "test": "B.6-lowNAV-342(min=0.0521)",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "category": "metrics_short",
+      "test": "C-preset-1m",
+      "status": "PASS",
+      "details": "ret=0.0116, ann_ret=0.1924"
+    },
+    {
+      "category": "metrics_short",
+      "test": "C-preset-3m",
+      "status": "PASS",
+      "details": "ret=0.0051, ann_ret=0.0214"
+    },
+    {
+      "category": "metrics_short",
+      "test": "C-preset-6m",
+      "status": "PASS",
+      "details": "ret=0.1346, ann_ret=0.2955"
+    },
+    {
+      "category": "metrics_short",
+      "test": "C-preset-1y",
+      "status": "PASS",
+      "details": "ret=0.3479, ann_ret=0.3501"
+    },
+    {
+      "category": "metrics_short",
+      "test": "C-preset-ytd",
+      "status": "PASS",
+      "details": "ret=-0.0093, ann_ret=-0.0559"
+    },
+    {
+      "category": "metrics_short",
+      "test": "C.6-超短区间",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "category": "metrics_short",
+      "test": "C.7-risk_free_rate",
+      "status": "PASS",
+      "details": "rf=0: sharpe=0.0891, rf=10%: sharpe=-0.3162"
+    },
+    {
+      "category": "metrics_short",
+      "test": "C.8-月度收益表非空",
+      "status": "PASS",
+      "details": "11个月"
+    },
+    {
+      "category": "metrics_short",
+      "test": "C.8-月度数据合理",
+      "status": "PASS",
+      "details": "最后月: {'year': 2024, 'month': 12, 'return_pct': 4.2181}"
+    },
+    {
+      "category": "error_handling",
+      "test": "D.1-无效fund_id",
+      "status": "PASS",
+      "details": "status=400"
+    },
+    {
+      "category": "error_handling",
+      "test": "D.2-空权重",
+      "status": "PASS",
+      "details": "status=400"
+    },
+    {
+      "category": "error_handling",
+      "test": "D.3-日期倒序",
+      "status": "PASS",
+      "details": "status=400"
+    },
+    {
+      "category": "error_handling",
+      "test": "D.4-无效preset",
+      "status": "PASS",
+      "details": "status=400"
+    },
+    {
+      "category": "error_handling",
+      "test": "D.5-不存在基金",
+      "status": "PASS",
+      "details": "status=404"
+    },
+    {
+      "category": "stress",
+      "test": "D.6-50并发成功率",
+      "status": "PASS",
+      "details": "100.0% (100/100)"
+    },
+    {
+      "category": "stress",
+      "test": "D.6-50并发P95",
+      "status": "PASS",
+      "details": "P95=2372ms, avg=2185ms, total=4.6s"
+    },
+    {
+      "category": "stress",
+      "test": "D.7-20并发回测成功率",
+      "status": "PASS",
+      "details": "100.0% (20/20)"
+    },
+    {
+      "category": "stress",
+      "test": "D.7-20并发回测P95",
+      "status": "PASS",
+      "details": "P95=2356ms, total=2.4s"
+    },
+    {
+      "category": "stress",
+      "test": "D.8-超大回测",
+      "status": "PASS",
+      "details": "status=200, time=2.3s, ret=0.7260"
+    }
+  ]
+}

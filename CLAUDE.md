@@ -68,6 +68,15 @@
 - [x] fetchApi: 解析服务端错误详情、处理204响应
 - [x] 比较页: 错误提示优化(显示缺数据基金名)、搜索支持单字
 
+### Phase 3.5: 数据质量优化 - 完成
+- [x] client.py: RateLimitError + 自适应退避重试 + 速率控制
+- [x] fund.py: nav_status + data_quality_score + data_quality_tags 字段
+- [x] fund_service.get_nav_series: 优先cumulative_nav + 交替模式检测
+- [x] ingest_nav_robust.py: 背压控制 + 状态标记 + 断点续传
+- [x] check_data_quality.py: 4维度评分(数据量/连续性/稳定性/完整性)
+- [x] verify_nav_data.py: API vs DB抽样比对校验
+- [x] 测试: 72个全通过(33 API + 4回测 + 7复权 + 28边界)
+
 ### Phase 4-5: 待开始
 - [ ] 产品运营 + 估值表导入
 - [ ] 定时任务(daily_update.py)
@@ -75,11 +84,12 @@
 
 ## 数据状态
 - 基金: 918只(有fof99_fund_id的915只可爬取)
-- 有NAV数据的基金: 113只(39只日频, 73只周频, 1只未知), 50,985条净值记录
-- 无NAV数据: 805只(fof99 API不返回净值历史, 可能因私募限制)
+- 有NAV数据: 708只(约150只日频, 约520只周频), 332,938条净值记录
+- pending: 207只(限流未完成, 可用--resume-from继续)
 - 指数: 3只核心指数(沪深300/中证500/中证1000), 98,423条数据
-- NAV数据范围: 2002-01-04 ~ 2026-02-25
-- 全量拉取完成(2026-03-06)
+- NAV数据范围: 2002-01-04 ~ 2026-03-06
+- 数据质量: 615只(86.5%)评分>=80, 509只评分>=90
+- 交替模式基金: 179只(unit_nav/cumulative_nav交替不一致, 自动过滤处理)
 
 ## 编码约定
 - 后端: Python async/await, type hints, ruff格式化, 120字符行宽

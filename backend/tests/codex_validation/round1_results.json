@@ -1,0 +1,285 @@
+{
+  "round": 1,
+  "date": "2026-03-07",
+  "total": 46,
+  "passed": 46,
+  "failed": 0,
+  "details": [
+    {
+      "category": "backtest",
+      "test": "1.1-total_return范围",
+      "status": "PASS",
+      "details": "total_ret=-0.0334, max_dd=-0.2355"
+    },
+    {
+      "category": "backtest",
+      "test": "1.1-max_drawdown范围",
+      "status": "PASS",
+      "details": "total_ret=-0.0334, max_dd=-0.2355"
+    },
+    {
+      "category": "backtest",
+      "test": "1.1-nav_series非空",
+      "status": "PASS",
+      "details": "total_ret=-0.0334, max_dd=-0.2355"
+    },
+    {
+      "category": "backtest",
+      "test": "1.1-NAV一致性",
+      "status": "PASS",
+      "details": "total_ret=-0.0334, max_dd=-0.2355"
+    },
+    {
+      "category": "backtest",
+      "test": "1.1-日期递增",
+      "status": "PASS",
+      "details": "total_ret=-0.0334, max_dd=-0.2355"
+    },
+    {
+      "category": "backtest",
+      "test": "1.2-HTTP成功",
+      "status": "PASS",
+      "details": "total_ret=-0.0017"
+    },
+    {
+      "category": "backtest",
+      "test": "1.2-指标合理",
+      "status": "PASS",
+      "details": "max_dd=-0.2900"
+    },
+    {
+      "category": "backtest",
+      "test": "1.2-交易成本",
+      "status": "PASS",
+      "details": "无成本=-0.0011, 有成本=-0.0017"
+    },
+    {
+      "category": "backtest",
+      "test": "1.3-HTTP成功",
+      "status": "PASS",
+      "details": "total_ret=0.0871"
+    },
+    {
+      "category": "backtest",
+      "test": "1.3-数据量",
+      "status": "PASS",
+      "details": "nav_series=179条"
+    },
+    {
+      "category": "backtest",
+      "test": "1.3-指标合理",
+      "status": "PASS",
+      "details": "total_ret=0.0871, max_dd=-0.1466"
+    },
+    {
+      "category": "data_integrity",
+      "test": "2.1-基金573记录数",
+      "status": "PASS",
+      "details": "API=2687, DB=2687"
+    },
+    {
+      "category": "data_integrity",
+      "test": "2.1-基金588记录数",
+      "status": "PASS",
+      "details": "API=2330, DB=2330"
+    },
+    {
+      "category": "data_integrity",
+      "test": "2.1-基金564记录数",
+      "status": "PASS",
+      "details": "API=2161, DB=2161"
+    },
+    {
+      "category": "data_integrity",
+      "test": "2.1-基金1183记录数",
+      "status": "PASS",
+      "details": "API=2021, DB=2021"
+    },
+    {
+      "category": "data_integrity",
+      "test": "2.1-基金1107记录数",
+      "status": "PASS",
+      "details": "API=2005, DB=2005"
+    },
+    {
+      "category": "data_integrity",
+      "test": "2.2-NAV值精确(基金573)",
+      "status": "PASS",
+      "details": "对比前5条"
+    },
+    {
+      "category": "data_integrity",
+      "test": "2.3-指数000300",
+      "status": "PASS",
+      "details": "records=5860, range=2002-01-04~2026-03-05"
+    },
+    {
+      "category": "data_integrity",
+      "test": "2.3-指数000905",
+      "status": "PASS",
+      "details": "records=5140, range=2004-12-31~2026-03-05"
+    },
+    {
+      "category": "data_integrity",
+      "test": "2.3-指数000852",
+      "status": "PASS",
+      "details": "records=5140, range=2004-12-31~2026-03-05"
+    },
+    {
+      "category": "data_integrity",
+      "test": "2.3-搜索000300",
+      "status": "PASS",
+      "details": "搜索到15只指数"
+    },
+    {
+      "category": "data_integrity",
+      "test": "2.3-搜索000905",
+      "status": "PASS",
+      "details": "搜索到15只指数"
+    },
+    {
+      "category": "data_integrity",
+      "test": "2.3-搜索000852",
+      "status": "PASS",
+      "details": "搜索到15只指数"
+    },
+    {
+      "category": "metrics",
+      "test": "3-基金573-total_return",
+      "status": "PASS",
+      "details": "calc=0.274977, api=0.274977, diff=0.000000, tol=0.01"
+    },
+    {
+      "category": "metrics",
+      "test": "3-基金573-annualized_return",
+      "status": "PASS",
+      "details": "calc=0.021987, api=0.021987, diff=0.000000, tol=0.02"
+    },
+    {
+      "category": "metrics",
+      "test": "3-基金573-max_drawdown",
+      "status": "PASS",
+      "details": "calc=-0.629733, api=-0.629733, diff=0.000000, tol=0.01"
+    },
+    {
+      "category": "metrics",
+      "test": "3-基金573-annualized_volatility",
+      "status": "PASS",
+      "details": "calc=0.246751, api=0.246751, diff=0.000000, tol=0.02"
+    },
+    {
+      "category": "metrics",
+      "test": "3-基金573-sharpe_ratio",
+      "status": "PASS",
+      "details": "calc=0.008052, api=0.008052, diff=0.000000, tol=0.1"
+    },
+    {
+      "category": "metrics",
+      "test": "3-基金588-total_return",
+      "status": "PASS",
+      "details": "calc=0.614000, api=0.614000, diff=0.000000, tol=0.01"
+    },
+    {
+      "category": "metrics",
+      "test": "3-基金588-annualized_return",
+      "status": "PASS",
+      "details": "calc=0.051086, api=0.051086, diff=0.000000, tol=0.02"
+    },
+    {
+      "category": "metrics",
+      "test": "3-基金588-max_drawdown",
+      "status": "PASS",
+      "details": "calc=-0.580000, api=-0.580000, diff=0.000000, tol=0.01"
+    },
+    {
+      "category": "metrics",
+      "test": "3-基金588-annualized_volatility",
+      "status": "PASS",
+      "details": "calc=0.378762, api=0.378762, diff=0.000000, tol=0.02"
+    },
+    {
+      "category": "metrics",
+      "test": "3-基金588-sharpe_ratio",
+      "status": "PASS",
+      "details": "calc=0.082072, api=0.082072, diff=0.000000, tol=0.1"
+    },
+    {
+      "category": "metrics",
+      "test": "3-基金564-total_return",
+      "status": "PASS",
+      "details": "calc=4.882000, api=4.882000, diff=0.000000, tol=0.01"
+    },
+    {
+      "category": "metrics",
+      "test": "3-基金564-annualized_return",
+      "status": "PASS",
+      "details": "calc=0.166347, api=0.166347, diff=0.000000, tol=0.02"
+    },
+    {
+      "category": "metrics",
+      "test": "3-基金564-max_drawdown",
+      "status": "PASS",
+      "details": "calc=-0.567818, api=-0.567818, diff=0.000000, tol=0.01"
+    },
+    {
+      "category": "metrics",
+      "test": "3-基金564-annualized_volatility",
+      "status": "PASS",
+      "details": "calc=0.271142, api=0.271142, diff=0.000000, tol=0.02"
+    },
+    {
+      "category": "metrics",
+      "test": "3-基金564-sharpe_ratio",
+      "status": "PASS",
+      "details": "calc=0.539741, api=0.539741, diff=0.000000, tol=0.1"
+    },
+    {
+      "category": "stress",
+      "test": "4.1-并发10-成功率",
+      "status": "PASS",
+      "details": "100.0% (60/60)"
+    },
+    {
+      "category": "stress",
+      "test": "4.1-并发10-P95",
+      "status": "PASS",
+      "details": "P95=2135ms, avg=2063ms, total=12.5s"
+    },
+    {
+      "category": "stress",
+      "test": "4.1-并发30-成功率",
+      "status": "PASS",
+      "details": "100.0% (60/60)"
+    },
+    {
+      "category": "stress",
+      "test": "4.1-并发30-P95",
+      "status": "PASS",
+      "details": "P95=2247ms, avg=2112ms, total=4.3s"
+    },
+    {
+      "category": "stress",
+      "test": "4.2-回测并发5-成功率",
+      "status": "PASS",
+      "details": "100.0% (20/20)"
+    },
+    {
+      "category": "stress",
+      "test": "4.2-回测并发5-P95",
+      "status": "PASS",
+      "details": "P95=2089ms, total=8.3s"
+    },
+    {
+      "category": "stress",
+      "test": "4.2-回测并发10-成功率",
+      "status": "PASS",
+      "details": "100.0% (20/20)"
+    },
+    {
+      "category": "stress",
+      "test": "4.2-回测并发10-P95",
+      "status": "PASS",
+      "details": "P95=2187ms, total=4.3s"
+    }
+  ]
+}

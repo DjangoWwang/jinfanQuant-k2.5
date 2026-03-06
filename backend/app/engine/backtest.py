@@ -327,7 +327,11 @@ class BacktestEngine:
         aligned: dict[str, pd.Series],
         start_date: datetime.date,
     ) -> dict[str, pd.Series]:
-        """Keep only funds whose data starts at or before start_date."""
+        """Keep only funds whose data starts at or near start_date.
+
+        Allow up to 7 calendar days of slack to handle weekends and holidays.
+        """
+        cutoff = start_date + datetime.timedelta(days=7)
         result = {}
         for key, series in aligned.items():
             s = series.dropna().sort_index()
@@ -336,7 +340,7 @@ class BacktestEngine:
             first = s.index[0]
             if isinstance(first, pd.Timestamp):
                 first = first.date()
-            if first <= start_date:
+            if first <= cutoff:
                 result[key] = series
         return result
 

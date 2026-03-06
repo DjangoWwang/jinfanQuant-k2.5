@@ -73,7 +73,7 @@ async def main():
             print(f"  API v2: {len(api_records)}条")
 
             if not api_records:
-                print(f"  ⚠ API无数据，跳过")
+                print(f"  WARN: API无数据，跳过")
                 issues.append((fund_id, fund_name, "API无数据"))
                 continue
 
@@ -111,7 +111,7 @@ async def main():
             total_match += matched
             total_mismatch += mismatched
 
-            status = "✓" if mismatched == 0 else "✗"
+            status = "PASS" if mismatched == 0 else "FAIL"
             print(f"  {status} 匹配={matched}, 不匹配={mismatched}, DB缺失={missing_in_db}")
             if mismatch_details:
                 for d in mismatch_details[:5]:
@@ -142,7 +142,7 @@ async def main():
         for fid, name, issue in issues:
             print(f"  基金 {fid} ({name}): {issue}")
     else:
-        print(f"\n✓ 全部校验通过!")
+        print(f"\nPASS: 全部校验通过!")
 
 
 if __name__ == "__main__":
