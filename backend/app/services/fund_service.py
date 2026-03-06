@@ -159,18 +159,52 @@ class FundService:
         start_date: date | None = None,
         end_date: date | None = None,
     ) -> pd.Series:
-        """Get NAV as a pandas Series indexed by date (for metrics calculation)."""
+        """Get NAV as a pandas Series indexed by date (for metrics calculation).
+
+        处理逻辑：
+        1. 优先使用 cumulative_nav（消除分红跳变）
+        2. 检测交替模式（unit_nav与cumulative_nav交替不一致）
+           若存在，只保留 unit_nav==cumulative_nav 的记录
+        3. 回退到 unit_nav
+        """
         records = await self.get_nav_history(db, fund_id, start_date, end_date)
         if not records:
             return pd.Series(dtype=float)
-        dates = [r.nav_date for r in records]
-        navs = [float(r.unit_nav) for r in records if r.unit_nav is not None]
-        if len(navs) != len(dates):
-            # Filter out records without NAV
-            pairs = [(r.nav_date, float(r.unit_nav)) for r in records if r.unit_nav is not None]
-            if not pairs:
-                return pd.Series(dtype=float)
-            dates, navs = zip(*pairs)
+
+        # 检测交替模式：统计 unit_nav != cumulative_nav 的比例
+        same_count = 0
+        diff_count = 0
+        for r in records:
+            if r.unit_nav is not None and r.cumulative_nav is not None:
+                if abs(float(r.unit_nav) - float(r.cumulative_nav)) < 0.01:
+                    same_count += 1
+                else:
+                    diff_count += 1
+
+        # 若 same 和 diff 各占 20%-80%，判定为交替模式
+        total = same_count + diff_count
+        is_interleaved = (
+            total > 20
+            and same_count > total * 0.15
+            and diff_count > total * 0.15
+        )
+
+        pairs = []
+        for r in records:
+            if is_interleaved:
+                # 交替模式：只用 unit_nav == cumulative_nav 的行
+                if (r.unit_nav is not None and r.cumulative_nav is not None
+                        and abs(float(r.unit_nav) - float(r.cumulative_nav)) < 0.01):
+                    pairs.append((r.nav_date, float(r.cumulative_nav)))
+            else:
+                # 正常模式：优先 cumulative_nav
+                nav = r.cumulative_nav if r.cumulative_nav is not None else r.unit_nav
+                if nav is not None:
+                    pairs.append((r.nav_date, float(nav)))
+
+        if not pairs:
+            return pd.Series(dtype=float)
+        dates, navs = zip(*pairs)
         return pd.Series(navs, index=pd.DatetimeIndex(dates), name=f"fund_{fund_id}")
 
     async def _update_latest_nav(self, db: AsyncSession, fund_id: int) -> None:

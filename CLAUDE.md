@@ -35,7 +35,7 @@
 - [x] PostgreSQL 17安装 (winget) + 数据库创建
 - [x] 数据库迁移运行 (17个表已创建)
 - [x] 交易日历填充 (2016-2026, 4018行, 2672个交易日)
-- [x] Git仓库 (nardwang2026/jinfan-quant, 私有)
+- [x] Git仓库 (DjangoWwang/jinfan-quant, 私有)
 
 ### Phase 1: 数据基础 — 爬虫模块 - 完成
 - [x] crawler/fof99/client.py: 登录、认证、DES解密
@@ -44,7 +44,7 @@
 - [x] crawler/fof99/index_scraper.py: 指数列表+历史净值+牛牛自建指数
 - [x] 集成测试通过 (19/24项)
 
-### Phase 2: 基金研究 — 指标+基金池+比较 - 进行中
+### Phase 2: 基金研究 — 指标+基金池+比较 - 完成
 - [x] engine/metrics.py: 收益/回撤/波动率/Sharpe/Sortino/Calmar/区间计算/归一化NAV
 - [x] engine/freq_align.py: 频率检测/降频/插值/多序列交集对齐
 - [x] schemas/fund.py: Fund/Nav/Pool/Comparison请求响应Schema
@@ -52,11 +52,34 @@
 - [x] services/pool_service.py: 基金池增删查
 - [x] services/comparison_service.py: 多基金比较(频率对齐+指标计算)
 - [x] API路由: funds(CRUD+NAV+指标), pools(CRUD), comparison(POST)
-- [x] FastAPI启动验证通过 (health + funds + pools 端点正常)
-- [ ] 爬虫数据入库服务 (crawler→DB pipeline)
-- [ ] 前端: 基金列表+详情+基金池+比较页面
+- [x] services/ingestion_service.py: 爬虫数据入库(基金列表+净值+指数)
+- [x] 前端: 基金列表(动态多选筛选)+详情(ECharts图表区间联动)+基金池+比较
 
-### Phase 3-5: 待开始
+### Phase 3: 组合研究与回测 - 完成
+- [x] engine/backtest.py: 回测引擎(intersection/dynamic_entry/truncate三模式)
+- [x] engine/backtest准确性验证: 合成数据0差异 + 真实指数数据通过
+- [x] schemas/portfolio.py: Portfolio/Backtest请求响应Schema(支持基金+指数混合)
+- [x] API: portfolios(CRUD), backtest/run(执行), backtest/results(查看), backtest/history(历史)
+- [x] API: backtest/search-assets(统一搜索, 支持asset_type过滤)
+- [x] 前端: 组合创建向导(3步骤: 配置→参数→回测)
+- [x] 前端: 组合列表页 + 组合详情页(权重饼图+回测结果+历史记录)
+- [x] 前端: 保存组合弹窗、删除组合
+- [x] DB迁移: portfolio_allocations支持index_code(基金+指数混合)
+- [x] fetchApi: 解析服务端错误详情、处理204响应
+- [x] 比较页: 错误提示优化(显示缺数据基金名)、搜索支持单字
+
+### Phase 4-5: 待开始
+- [ ] 产品运营 + 估值表导入
+- [ ] 定时任务(daily_update.py)
+- [ ] 仪表盘完善 + 前端体验优化
+
+## 数据状态
+- 基金: 918只(有fof99_fund_id的915只可爬取)
+- 有NAV数据的基金: 113只(39只日频, 73只周频, 1只未知), 50,985条净值记录
+- 无NAV数据: 805只(fof99 API不返回净值历史, 可能因私募限制)
+- 指数: 3只核心指数(沪深300/中证500/中证1000), 98,423条数据
+- NAV数据范围: 2002-01-04 ~ 2026-02-25
+- 全量拉取完成(2026-03-06)
 
 ## 编码约定
 - 后端: Python async/await, type hints, ruff格式化, 120字符行宽
@@ -71,6 +94,8 @@
 - 频率对齐: 默认降频至周频, 可选日频插值
 - 数据源: 爬虫为可扩展模块, 当前仅火富牛
 - 交易日历: exchange_calendars最远支持到2026年底
+- 权重系统: 前端百分比(0-100), API传输比例(0-1)
+- 资产ID格式: fund_123(基金), idx_000300(指数)
 
 ## 火富牛登录凭据
 - 账号: 见 backend/.env

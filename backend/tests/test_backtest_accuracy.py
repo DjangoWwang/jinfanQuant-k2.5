@@ -11,6 +11,7 @@ import datetime
 import sys
 import os
 
+import pytest
 import numpy as np
 import pandas as pd
 
@@ -108,6 +109,7 @@ def manual_portfolio_nav(
     return pd.Series(portfolio_nav[1:], index=pd.DatetimeIndex(dates))
 
 
+@pytest.mark.asyncio
 async def test_equal_weight_no_cost():
     """测试1: 等权50/50，无交易成本，月度再平衡。"""
     print("=" * 60)
@@ -163,6 +165,7 @@ async def test_equal_weight_no_cost():
     print("  [PASS]")
 
 
+@pytest.mark.asyncio
 async def test_with_transaction_cost():
     """测试2: 等权50/50，交易成本10bps，月度再平衡。"""
     print("\n" + "=" * 60)
@@ -211,6 +214,7 @@ async def test_with_transaction_cost():
     print("  [PASS]")
 
 
+@pytest.mark.asyncio
 async def test_metrics_accuracy():
     """测试3: 验证metrics计算（总收益、最大回撤、年化收益）。"""
     print("\n" + "=" * 60)
@@ -243,6 +247,7 @@ async def test_metrics_accuracy():
     print("  [PASS]")
 
 
+@pytest.mark.asyncio
 async def test_real_index_backtest():
     """测试4: 用真实指数数据回测（如果DB可用）。"""
     print("\n" + "=" * 60)

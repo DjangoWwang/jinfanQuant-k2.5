@@ -12,10 +12,12 @@ API逆向分析结果:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import os
+import time
 from binascii import unhexlify
 from typing import Any
 
@@ -26,6 +28,19 @@ logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.huofuniu.com"
 PYAPI_BASE = "https://pyapi.huofuniu.com"
+
+# 限流关键词识别
+_RATE_LIMIT_KEYWORDS = ["同时访问人数太多", "稍后再试", "请求频繁", "访问过于频繁"]
+
+
+class RateLimitError(Exception):
+    """火富牛API限流错误，可重试。"""
+    pass
+
+
+class ApiBusinessError(Exception):
+    """火富牛API业务错误，不可重试。"""
+    pass
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -100,6 +115,11 @@ class Fof99Client:
             follow_redirects=True,
         )
 
+        # 速率控制
+        self._last_request_time: float = 0.0
+        self._min_interval: float = 0.5  # 最小请求间隔(秒)
+        self._consecutive_rate_limits: int = 0
+
     @property
     def device_id(self) -> str:
         return self._device_id
@@ -161,52 +181,24 @@ class Fof99Client:
         self._authenticated = True
 
     # ------------------------------------------------------------------
-    # Generic request helpers
+    # Generic request helpers (with rate limiting and retry)
     # ------------------------------------------------------------------
 
     async def api_get(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        """GET request to api.huofuniu.com."""
-        self._ensure_auth()
-        resp = await self._client.get(
-            f"{API_BASE}{path}",
-            params=params,
-            headers=self._build_headers(),
-        )
-        resp.raise_for_status()
-        return self._parse_response(resp.json())
+        """GET request to api.huofuniu.com with retry."""
+        return await self._request_with_retry("GET", f"{API_BASE}{path}", params=params)
 
     async def api_post(self, path: str, json_body: dict[str, Any] | None = None) -> Any:
-        """POST request to api.huofuniu.com."""
-        self._ensure_auth()
-        resp = await self._client.post(
-            f"{API_BASE}{path}",
-            json=json_body,
-            headers=self._build_headers(),
-        )
-        resp.raise_for_status()
-        return self._parse_response(resp.json())
+        """POST request to api.huofuniu.com with retry."""
+        return await self._request_with_retry("POST", f"{API_BASE}{path}", json_body=json_body)
 
     async def pyapi_get(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        """GET request to pyapi.huofuniu.com."""
-        self._ensure_auth()
-        resp = await self._client.get(
-            f"{PYAPI_BASE}{path}",
-            params=params,
-            headers=self._build_headers(),
-        )
-        resp.raise_for_status()
-        return self._parse_response(resp.json())
+        """GET request to pyapi.huofuniu.com with retry."""
+        return await self._request_with_retry("GET", f"{PYAPI_BASE}{path}", params=params)
 
     async def pyapi_post(self, path: str, json_body: dict[str, Any] | None = None) -> Any:
-        """POST request to pyapi.huofuniu.com."""
-        self._ensure_auth()
-        resp = await self._client.post(
-            f"{PYAPI_BASE}{path}",
-            json=json_body,
-            headers=self._build_headers(),
-        )
-        resp.raise_for_status()
-        return self._parse_response(resp.json())
+        """POST request to pyapi.huofuniu.com with retry."""
+        return await self._request_with_retry("POST", f"{PYAPI_BASE}{path}", json_body=json_body)
 
     # ------------------------------------------------------------------
     # Internal
@@ -216,8 +208,72 @@ class Fof99Client:
         if not self._authenticated:
             raise RuntimeError("Fof99Client 未认证，请先调用 login() 或 set_token()")
 
+    async def _throttle(self) -> None:
+        """Enforce minimum interval between requests."""
+        now = time.monotonic()
+        elapsed = now - self._last_request_time
+        if elapsed < self._min_interval:
+            await asyncio.sleep(self._min_interval - elapsed)
+        self._last_request_time = time.monotonic()
+
+    async def _request_with_retry(
+        self,
+        method: str,
+        url: str,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+        max_retries: int = 3,
+    ) -> Any:
+        """Execute HTTP request with rate limit detection and adaptive retry."""
+        self._ensure_auth()
+
+        last_error: Exception | None = None
+        for attempt in range(max_retries + 1):
+            await self._throttle()
+            try:
+                if method == "GET":
+                    resp = await self._client.get(url, params=params, headers=self._build_headers())
+                else:
+                    resp = await self._client.post(url, json=json_body, headers=self._build_headers())
+                resp.raise_for_status()
+                result = self._parse_response(resp.json())
+                # 成功：重置限流计数，缓慢降低间隔
+                if self._consecutive_rate_limits > 0:
+                    self._consecutive_rate_limits = 0
+                    self._min_interval = max(0.5, self._min_interval * 0.7)
+                return result
+
+            except RateLimitError as e:
+                self._consecutive_rate_limits += 1
+                # 自适应增加间隔
+                self._min_interval = min(60.0, self._min_interval * 2)
+                wait = 5 * (2 ** attempt)  # 5, 10, 20, 40...
+                logger.warning(
+                    "限流(第%d次连续, attempt %d/%d): 等%ds, 间隔调至%.1fs | %s",
+                    self._consecutive_rate_limits, attempt + 1, max_retries + 1, wait, self._min_interval, url,
+                )
+                last_error = e
+                if attempt < max_retries:
+                    await asyncio.sleep(wait)
+
+            except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
+                wait = 3 * (attempt + 1)
+                logger.warning("网络错误(attempt %d/%d): 等%ds | %s: %s", attempt + 1, max_retries + 1, wait, url, e)
+                last_error = e
+                if attempt < max_retries:
+                    await asyncio.sleep(wait)
+
+        # 所有重试耗尽
+        if isinstance(last_error, RateLimitError):
+            raise last_error
+        raise last_error or RuntimeError(f"请求失败: {url}")
+
     @staticmethod
     def _parse_response(data: dict[str, Any]) -> Any:
         if data.get("error_code") == 0:
             return data.get("data")
-        raise RuntimeError(f"火富牛API错误: {data.get('msg', '未知错误')}")
+        msg = data.get("msg", "未知错误")
+        # 检测限流
+        if any(kw in msg for kw in _RATE_LIMIT_KEYWORDS):
+            raise RateLimitError(msg)
+        raise ApiBusinessError(f"火富牛API错误: {msg}")

@@ -24,6 +24,9 @@ class Fund(Base):
     is_private = Column(Boolean, default=True)
     fof99_fund_id = Column(String(50), nullable=True)
     status = Column(String(20), default="active")
+    nav_status = Column(String(20), default="pending")  # pending|has_data|no_data|rate_limited|fetch_failed
+    data_quality_score = Column(Integer, nullable=True)  # 0-100, 数据质量评分
+    data_quality_tags = Column(String(500), nullable=True)  # 逗号分隔标签: interleaved,sparse,jump,...
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
