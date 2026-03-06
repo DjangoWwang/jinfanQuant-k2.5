@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import {
   ArrowLeft, Loader2, Upload, FileSpreadsheet, ChevronDown, ChevronRight,
-  Calendar, Building2, DollarSign, TrendingUp, BarChart3, Eye,
+  Calendar, Building2, DollarSign, TrendingUp, BarChart3, Eye, FileText,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -96,6 +96,40 @@ interface UploadResult {
   warnings: string[];
 }
 
+interface AttributionCategory {
+  category: string;
+  category_name: string;
+  benchmark_weight: number;
+  actual_weight: number;
+  benchmark_return: number;
+  actual_return: number;
+  allocation_effect: number;
+  selection_effect: number;
+  interaction_effect: number;
+  total_effect: number;
+}
+
+interface AttributionResult {
+  product_id: number;
+  period_start: string;
+  period_end: string;
+  granularity: string;
+  periods: {
+    period_start: string;
+    period_end: string;
+    excess_return: number;
+    total_allocation: number;
+    total_selection: number;
+    total_interaction: number;
+    categories: AttributionCategory[];
+  }[];
+  cumulative_excess: number;
+  cumulative_allocation: number;
+  cumulative_selection: number;
+  cumulative_interaction: number;
+  aggregated_categories: AttributionCategory[];
+}
+
 /* --- Page --- */
 
 export default function ProductDetailPage() {
@@ -113,6 +147,19 @@ export default function ProductDetailPage() {
   const [expandedL1, setExpandedL1] = useState<Set<string>>(new Set());
   const [expandedL2, setExpandedL2] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Attribution state
+  const [attrStart, setAttrStart] = useState("");
+  const [attrEnd, setAttrEnd] = useState("");
+  const [attribution, setAttribution] = useState<AttributionResult | null>(null);
+  const [attrLoading, setAttrLoading] = useState(false);
+
+  // Report generation state
+  const [reportDialogOpen, setReportDialogOpen] = useState(false);
+  const [reportType, setReportType] = useState("monthly");
+  const [reportStart, setReportStart] = useState("");
+  const [reportEnd, setReportEnd] = useState("");
+  const [generating, setGenerating] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -193,6 +240,52 @@ export default function ProductDetailPage() {
       next.has(code) ? next.delete(code) : next.add(code);
       return next;
     });
+  }
+
+  async function loadAttribution() {
+    if (!attrStart || !attrEnd) return;
+    setAttrLoading(true);
+    try {
+      const result = await fetchApi<AttributionResult>(
+        `/reports/${productId}/attribution?period_start=${attrStart}&period_end=${attrEnd}&granularity=monthly`
+      );
+      setAttribution(result);
+    } catch (e: any) {
+      console.error("Attribution failed:", e);
+      setAttribution(null);
+    } finally {
+      setAttrLoading(false);
+    }
+  }
+
+  async function handleGenerateReport() {
+    setGenerating(true);
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+      const res = await fetch(`${apiBase}/reports/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          product_id: productId,
+          report_type: reportType,
+          period_start: reportStart,
+          period_end: reportEnd,
+        }),
+      });
+      if (!res.ok) throw new Error("报告生成失败");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `报告_${productId}_${reportEnd}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setReportDialogOpen(false);
+    } catch (e: any) {
+      alert(e.message || "报告生成失败");
+    } finally {
+      setGenerating(false);
+    }
   }
 
   if (loading || !product) {
@@ -306,6 +399,15 @@ export default function ProductDetailPage() {
               {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
               上传估值表
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-[12px] gap-1.5"
+              onClick={() => setReportDialogOpen(true)}
+            >
+              <FileText className="h-3.5 w-3.5" />
+              生成报告
+            </Button>
           </div>
         }
       />
@@ -340,6 +442,7 @@ export default function ProductDetailPage() {
       <Tabs defaultValue="overview">
         <TabsList className="h-8">
           <TabsTrigger value="overview" className="text-[12px] h-7 px-3">概览</TabsTrigger>
+          <TabsTrigger value="attribution" className="text-[12px] h-7 px-3">归因分析</TabsTrigger>
           <TabsTrigger value="holdings" className="text-[12px] h-7 px-3">持仓明细</TabsTrigger>
           <TabsTrigger value="history" className="text-[12px] h-7 px-3">估值历史</TabsTrigger>
         </TabsList>
@@ -415,6 +518,160 @@ export default function ProductDetailPage() {
                   ))}
                 </TableBody>
               </Table>
+            </div>
+          )}
+        </TabsContent>
+
+        {/* Attribution tab */}
+        <TabsContent value="attribution" className="mt-3 space-y-4">
+          {/* Period selector */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-1.5">
+              <label className="text-[11px] text-muted-foreground">起始</label>
+              <input type="date" value={attrStart} onChange={(e) => setAttrStart(e.target.value)}
+                className="h-8 text-[12px] px-2 border border-border rounded bg-background" />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <label className="text-[11px] text-muted-foreground">结束</label>
+              <input type="date" value={attrEnd} onChange={(e) => setAttrEnd(e.target.value)}
+                className="h-8 text-[12px] px-2 border border-border rounded bg-background" />
+            </div>
+            <Button size="sm" className="h-8 text-[12px]" onClick={loadAttribution} disabled={attrLoading || !attrStart || !attrEnd}>
+              {attrLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
+              计算归因
+            </Button>
+          </div>
+
+          {/* Attribution summary cards */}
+          {attribution && (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="bg-card border border-border rounded p-3 text-center">
+                  <p className="text-[11px] text-muted-foreground mb-1">超额收益</p>
+                  <p className={`text-[16px] font-semibold tabular-nums ${attribution.cumulative_excess >= 0 ? "text-green-600" : "text-red-600"}`}>
+                    {(attribution.cumulative_excess * 100).toFixed(2)}%
+                  </p>
+                </div>
+                <div className="bg-card border border-border rounded p-3 text-center">
+                  <p className="text-[11px] text-muted-foreground mb-1">配置效应</p>
+                  <p className="text-[16px] font-semibold tabular-nums text-indigo-600">
+                    {(attribution.cumulative_allocation * 100).toFixed(2)}%
+                  </p>
+                </div>
+                <div className="bg-card border border-border rounded p-3 text-center">
+                  <p className="text-[11px] text-muted-foreground mb-1">选择效应</p>
+                  <p className="text-[16px] font-semibold tabular-nums text-blue-600">
+                    {(attribution.cumulative_selection * 100).toFixed(2)}%
+                  </p>
+                </div>
+                <div className="bg-card border border-border rounded p-3 text-center">
+                  <p className="text-[11px] text-muted-foreground mb-1">交互效应</p>
+                  <p className="text-[16px] font-semibold tabular-nums text-amber-600">
+                    {(attribution.cumulative_interaction * 100).toFixed(2)}%
+                  </p>
+                </div>
+              </div>
+
+              {/* Attribution bar chart (ECharts) */}
+              {attribution.aggregated_categories.length > 0 && (
+                <div className="bg-card border border-border rounded p-3">
+                  <h3 className="text-[13px] font-medium mb-2">分类归因</h3>
+                  <ReactECharts
+                    option={{
+                      tooltip: { trigger: "axis" },
+                      legend: { data: ["配置效应", "选择效应", "交互效应"], textStyle: { fontSize: 10 } },
+                      grid: { left: 50, right: 20, top: 40, bottom: 40 },
+                      xAxis: {
+                        type: "category",
+                        data: attribution.aggregated_categories.map((c) => c.category_name),
+                        axisLabel: { fontSize: 10, rotate: 30 },
+                      },
+                      yAxis: {
+                        type: "value",
+                        axisLabel: { fontSize: 10, formatter: (v: number) => `${(v * 100).toFixed(1)}%` },
+                      },
+                      series: [
+                        {
+                          name: "配置效应",
+                          type: "bar",
+                          data: attribution.aggregated_categories.map((c) => c.allocation_effect),
+                          itemStyle: { color: "#1e3a5f" },
+                        },
+                        {
+                          name: "选择效应",
+                          type: "bar",
+                          data: attribution.aggregated_categories.map((c) => c.selection_effect),
+                          itemStyle: { color: "#4f46e5" },
+                        },
+                        {
+                          name: "交互效应",
+                          type: "bar",
+                          data: attribution.aggregated_categories.map((c) => c.interaction_effect),
+                          itemStyle: { color: "#d4a017" },
+                        },
+                      ],
+                    }}
+                    style={{ height: 300 }}
+                  />
+                </div>
+              )}
+
+              {/* Attribution detail table */}
+              {attribution.aggregated_categories.length > 0 && (
+                <div className="bg-card border border-border rounded overflow-hidden">
+                  <h3 className="text-[13px] font-medium p-3 pb-2">归因分解明细</h3>
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/40">
+                        <TableHead className="h-8 text-[11px] font-normal">分类</TableHead>
+                        <TableHead className="h-8 text-[11px] font-normal text-right">基准权重</TableHead>
+                        <TableHead className="h-8 text-[11px] font-normal text-right">实际权重</TableHead>
+                        <TableHead className="h-8 text-[11px] font-normal text-right">基准收益</TableHead>
+                        <TableHead className="h-8 text-[11px] font-normal text-right">实际收益</TableHead>
+                        <TableHead className="h-8 text-[11px] font-normal text-right">配置效应</TableHead>
+                        <TableHead className="h-8 text-[11px] font-normal text-right">选择效应</TableHead>
+                        <TableHead className="h-8 text-[11px] font-normal text-right">交互效应</TableHead>
+                        <TableHead className="h-8 text-[11px] font-normal text-right">合计</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {attribution.aggregated_categories.map((c) => (
+                        <TableRow key={c.category} className="text-[12px]">
+                          <TableCell className="py-2 font-medium">{c.category_name}</TableCell>
+                          <TableCell className="py-2 text-right tabular-nums">{(c.benchmark_weight * 100).toFixed(2)}%</TableCell>
+                          <TableCell className="py-2 text-right tabular-nums">{(c.actual_weight * 100).toFixed(2)}%</TableCell>
+                          <TableCell className="py-2 text-right tabular-nums">{(c.benchmark_return * 100).toFixed(2)}%</TableCell>
+                          <TableCell className="py-2 text-right tabular-nums">{(c.actual_return * 100).toFixed(2)}%</TableCell>
+                          <TableCell className={`py-2 text-right tabular-nums ${c.allocation_effect >= 0 ? "text-green-600" : "text-red-600"}`}>
+                            {(c.allocation_effect * 100).toFixed(3)}%
+                          </TableCell>
+                          <TableCell className={`py-2 text-right tabular-nums ${c.selection_effect >= 0 ? "text-green-600" : "text-red-600"}`}>
+                            {(c.selection_effect * 100).toFixed(3)}%
+                          </TableCell>
+                          <TableCell className={`py-2 text-right tabular-nums ${c.interaction_effect >= 0 ? "text-green-600" : "text-red-600"}`}>
+                            {(c.interaction_effect * 100).toFixed(3)}%
+                          </TableCell>
+                          <TableCell className={`py-2 text-right tabular-nums font-medium ${c.total_effect >= 0 ? "text-green-600" : "text-red-600"}`}>
+                            {(c.total_effect * 100).toFixed(3)}%
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+
+              {attribution.aggregated_categories.length === 0 && (
+                <div className="bg-card border border-border rounded p-6 text-center text-muted-foreground text-[12px]">
+                  无归因数据。请确保产品已配置基准，且在选定期间内有估值快照。
+                </div>
+              )}
+            </>
+          )}
+
+          {!attribution && !attrLoading && (
+            <div className="bg-card border border-border rounded p-8 text-center text-muted-foreground text-[12px]">
+              选择日期区间后点击「计算归因」查看Brinson归因分析结果
             </div>
           )}
         </TabsContent>
@@ -538,6 +795,47 @@ export default function ProductDetailPage() {
         <div className="bg-card border border-border rounded p-3">
           <h3 className="text-[13px] font-medium mb-1">备注</h3>
           <p className="text-[12px] text-muted-foreground whitespace-pre-wrap">{product.notes}</p>
+        </div>
+      )}
+
+      {/* Report generation dialog */}
+      {reportDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-background border border-border rounded-lg shadow-lg w-[420px] p-5 space-y-4">
+            <h2 className="text-[15px] font-semibold">生成产品报告</h2>
+            <div className="space-y-3">
+              <div>
+                <label className="text-[11px] text-muted-foreground block mb-1">报告类型</label>
+                <select value={reportType} onChange={(e) => setReportType(e.target.value)}
+                  className="h-8 w-full text-[12px] px-2 border border-border rounded bg-background">
+                  <option value="monthly">月度报告</option>
+                  <option value="weekly">周度报告</option>
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] text-muted-foreground block mb-1">起始日期</label>
+                  <input type="date" value={reportStart} onChange={(e) => setReportStart(e.target.value)}
+                    className="h-8 w-full text-[12px] px-2 border border-border rounded bg-background" />
+                </div>
+                <div>
+                  <label className="text-[11px] text-muted-foreground block mb-1">结束日期</label>
+                  <input type="date" value={reportEnd} onChange={(e) => setReportEnd(e.target.value)}
+                    className="h-8 w-full text-[12px] px-2 border border-border rounded bg-background" />
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" size="sm" className="h-8 text-[12px]" onClick={() => setReportDialogOpen(false)}>
+                取消
+              </Button>
+              <Button size="sm" className="h-8 text-[12px] gap-1.5" onClick={handleGenerateReport}
+                disabled={generating || !reportStart || !reportEnd}>
+                {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
+                生成并下载PDF
+              </Button>
+            </div>
+          </div>
         </div>
       )}
     </div>

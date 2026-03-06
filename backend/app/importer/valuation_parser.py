@@ -152,9 +152,8 @@ class ValuationParser:
             holdings.append(parsed)
 
             # Capture total NAV from summary row
-            # In some formats, "资产净值" appears in item_code column
-            combined_text = f"{item_code} {parsed.get('item_name', '')}"
-            if "资产净值" in combined_text:
+            item_name = str(parsed.get("item_name", ""))
+            if "资产净值" in item_name:
                 total_nav = parsed.get("market_value")
 
             # Extract sub-fund allocation (L4 rows under 11090601)

@@ -119,6 +119,7 @@ class ProductService:
             performance_fee_rate=float(product.performance_fee_rate or 0),
             high_watermark=float(product.high_watermark) if product.high_watermark else None,
             linked_portfolio_id=product.linked_portfolio_id,
+            benchmark_id=product.benchmark_id,
             notes=product.notes,
             is_active=product.is_active,
             created_at=product.created_at,

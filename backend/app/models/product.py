@@ -23,6 +23,7 @@ class Product(Base):
     performance_fee_rate = Column(Numeric(6, 4), default=0)
     high_watermark = Column(Numeric(12, 6), nullable=True)
     linked_portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=True)
+    benchmark_id = Column(Integer, ForeignKey("composite_benchmarks.id"), nullable=True)
     notes = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

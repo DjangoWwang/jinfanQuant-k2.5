@@ -24,6 +24,7 @@ class ProductCreate(BaseModel):
     performance_fee_rate: float = Field(0.0, ge=0.0)
     high_watermark: float | None = None
     linked_portfolio_id: int | None = None
+    benchmark_id: int | None = None
     notes: str | None = Field(None, max_length=2000)
 
 
@@ -39,6 +40,7 @@ class ProductUpdate(BaseModel):
     performance_fee_rate: float | None = None
     high_watermark: float | None = None
     linked_portfolio_id: int | None = None
+    benchmark_id: int | None = None
     notes: str | None = None
 
 
@@ -59,6 +61,7 @@ class ProductResponse(BaseModel):
     performance_fee_rate: float = 0.0
     high_watermark: float | None = None
     linked_portfolio_id: int | None = None
+    benchmark_id: int | None = None
     notes: str | None = None
     is_active: bool = True
     created_at: datetime | None = None

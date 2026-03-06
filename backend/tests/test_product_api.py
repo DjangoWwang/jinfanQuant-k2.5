@@ -34,15 +34,13 @@ async def _override_get_db():
         yield session
 
 
-app.dependency_overrides[get_db] = _override_get_db
-
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 @pytest_asyncio.fixture(autouse=True)
 async def setup_database():
+    app.dependency_overrides[get_db] = _override_get_db
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield
