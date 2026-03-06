@@ -78,7 +78,7 @@ export default function ComparisonPage() {
 
   // 搜索基金
   useEffect(() => {
-    if (!search || search.length < 2) {
+    if (!search.trim()) {
       setSearchResults([]);
       return;
     }

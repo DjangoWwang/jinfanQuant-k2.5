@@ -167,7 +167,6 @@ async def run_backtest(
     weights_map: dict[str, float] = {}
 
     if req.portfolio_id:
-        # 从组合获取权重 (目前只支持基金)
         alloc_result = await db.execute(
             select(PortfolioAllocation)
             .where(PortfolioAllocation.portfolio_id == req.portfolio_id)
@@ -175,7 +174,11 @@ async def run_backtest(
         allocs = list(alloc_result.scalars().all())
         if not allocs:
             raise HTTPException(404, "组合不存在或无权重配置")
-        weights_map = {f"fund_{a.fund_id}": float(a.target_weight) for a in allocs}
+        for a in allocs:
+            if a.index_code:
+                weights_map[f"idx_{a.index_code}"] = float(a.target_weight)
+            elif a.fund_id:
+                weights_map[f"fund_{a.fund_id}"] = float(a.target_weight)
     elif req.weights:
         for w in req.weights:
             if w.fund_id is not None:

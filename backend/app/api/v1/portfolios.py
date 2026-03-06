@@ -158,6 +158,16 @@ async def get_portfolio(portfolio_id: int, db: AsyncSession = Depends(get_db)):
     )
     allocs = alloc_result.all()
 
+    # Resolve index names
+    index_codes = [a.PortfolioAllocation.index_code for a in allocs if a.PortfolioAllocation.index_code]
+    idx_names: dict[str, str] = {}
+    if index_codes:
+        idx_result = await db.execute(
+            select(Benchmark.index_code, Benchmark.index_name)
+            .where(Benchmark.index_code.in_(index_codes))
+        )
+        idx_names = {row[0]: row[1] for row in idx_result.all()}
+
     return {
         "id": portfolio.id,
         "name": portfolio.name,
@@ -169,7 +179,8 @@ async def get_portfolio(portfolio_id: int, db: AsyncSession = Depends(get_db)):
         "weights": [
             {
                 "fund_id": a.PortfolioAllocation.fund_id,
-                "fund_name": a.fund_name,
+                "index_code": a.PortfolioAllocation.index_code,
+                "fund_name": a.fund_name or idx_names.get(a.PortfolioAllocation.index_code or "", a.PortfolioAllocation.index_code or ""),
                 "strategy_type": a.strategy_type,
                 "nav_frequency": a.nav_frequency,
                 "weight": float(a.PortfolioAllocation.target_weight),

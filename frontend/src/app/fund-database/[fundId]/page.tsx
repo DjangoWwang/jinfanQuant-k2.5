@@ -163,11 +163,15 @@ export default function FundDetailPage() {
     loadMetrics();
   }, [fundId, interval]);
 
-  // 图表数据
+  // 图表数据 — 根据区间过滤
   const navSeries = useMemo(() => {
     if (!navData?.records?.length) return [];
-    return navData.records.map(r => ({ date: r.nav_date, nav: r.unit_nav }));
-  }, [navData]);
+    const all = navData.records.map(r => ({ date: r.nav_date, nav: r.unit_nav }));
+    // 用 metrics 返回的 start_date 截取
+    const startFilter = metrics?.start_date;
+    if (!startFilter) return all;
+    return all.filter(d => d.date >= startFilter);
+  }, [navData, metrics]);
 
   const drawdownSeries = useMemo(() => calcDrawdown(navSeries), [navSeries]);
 
@@ -371,7 +375,7 @@ export default function FundDetailPage() {
             净值走势
           </span>
           <span className="text-[11px] text-muted-foreground tabular-nums">
-            {navData?.total_count ?? 0} 条数据
+            {navSeries.length} 条数据
           </span>
         </div>
         {navSeries.length > 0 ? (

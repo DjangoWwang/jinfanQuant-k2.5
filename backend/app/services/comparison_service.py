@@ -42,13 +42,16 @@ class ComparisonService:
         # Fetch NAV series for all funds
         nav_dict: dict[str, pd.Series] = {}
         fund_meta: dict[int, dict] = {}
+        missing_funds: list[str] = []
 
         for fid in fund_ids:
             fund = await fund_service.get_fund(db, fid)
             if not fund:
+                missing_funds.append(f"#{fid}(不存在)")
                 continue
             series = await fund_service.get_nav_series(db, fid, start_date, end_date)
             if series.empty:
+                missing_funds.append(fund.fund_name)
                 continue
             key = str(fid)
             nav_dict[key] = series
@@ -58,8 +61,12 @@ class ComparisonService:
             }
 
         if len(nav_dict) < 2:
+            period = f"({start_date} ~ {end_date})" if start_date else ""
+            msg = f"所选区间{period}内有数据的基金不足2只。"
+            if missing_funds:
+                msg += f" 以下基金在此区间无净值数据: {', '.join(missing_funds)}"
             return {
-                "error": "需要至少2只有数据的基金进行比较",
+                "error": msg,
                 "available_funds": len(nav_dict),
             }
 
