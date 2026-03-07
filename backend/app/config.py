@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     JWT_EXPIRE_HOURS: int = 24
     JWT_ALGORITHM: str = "HS256"
 
+    # Proxy trust (set True when behind a trusted reverse proxy like nginx)
+    TRUST_PROXY_HEADERS: bool = False
+
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
     CACHE_TTL_SECONDS: int = 3600  # 1 hour default cache TTL

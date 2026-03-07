@@ -10,6 +10,7 @@ from app.models.scrape import DataSource, ScrapeJob
 from app.models.strategy import StrategyCategory
 from app.models.user import User
 from app.models.alert import RiskRule, AlertEvent
+from app.models.audit_log import AuditLog
 
 __all__ = [
     "Fund",
@@ -32,4 +33,5 @@ __all__ = [
     "User",
     "RiskRule",
     "AlertEvent",
+    "AuditLog",
 ]

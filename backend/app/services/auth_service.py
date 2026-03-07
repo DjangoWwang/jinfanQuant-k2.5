@@ -8,11 +8,12 @@ from typing import Sequence
 
 import bcrypt
 import jwt
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.user import User
+from app.models.audit_log import AuditLog
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,10 @@ def validate_password_strength(plain: str) -> None:
         raise ValueError("密码长度不能少于8个字符")
     if len(plain) > 128:
         raise ValueError("密码长度不能超过128个字符")
+    if not any(c.isalpha() for c in plain):
+        raise ValueError("密码必须包含至少一个字母")
+    if not any(c.isdigit() for c in plain):
+        raise ValueError("密码必须包含至少一个数字")
 
 
 def hash_password(plain: str) -> str:
@@ -37,7 +42,11 @@ def hash_password(plain: str) -> str:
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except (ValueError, TypeError) as e:
+        logger.warning("Password verification failed: %s", e)
+        return False
 
 
 # ------------------------------------------------------------------
@@ -134,3 +143,163 @@ async def change_password(db: AsyncSession, user: User, new_password: str) -> No
 async def get_user_count(db: AsyncSession) -> int:
     result = await db.execute(select(func.count(User.id)))
     return result.scalar() or 0
+
+
+async def create_initial_admin(
+    db: AsyncSession,
+    *,
+    username: str,
+    password: str,
+    email: str | None = None,
+    display_name: str | None = None,
+) -> User:
+    """Create the first admin user with advisory lock to prevent concurrent init.
+
+    Raises ValueError if the system is already initialized.
+    """
+    # Serialize initialization with PostgreSQL advisory lock
+    try:
+        await db.execute(text("SELECT pg_advisory_xact_lock(10001)"))
+    except Exception:
+        logger.debug("Advisory lock not available, falling back to count check")
+
+    count = await get_user_count(db)
+    if count != 0:
+        raise ValueError("系统已初始化，不能再使用首个管理员注册流程")
+
+    return await create_user(
+        db,
+        username=username,
+        password=password,
+        role="admin",
+        email=email,
+        display_name=display_name,
+    )
+
+
+async def count_active_admins(db: AsyncSession) -> int:
+    """Count active users with admin role."""
+    result = await db.execute(
+        select(func.count(User.id)).where(
+            User.role == "admin", User.is_active.is_(True)
+        )
+    )
+    return result.scalar() or 0
+
+
+async def exists_other_active_admin(db: AsyncSession, exclude_user_id: int) -> bool:
+    """Check if another active admin exists (besides exclude_user_id), with row lock."""
+    result = await db.execute(
+        select(User.id)
+        .where(
+            User.role == "admin",
+            User.is_active.is_(True),
+            User.id != exclude_user_id,
+        )
+        .limit(1)
+        .with_for_update()
+    )
+    return result.first() is not None
+
+
+async def get_user_by_id_for_update(db: AsyncSession, user_id: int) -> User | None:
+    """Load user with row-level lock for safe mutation."""
+    result = await db.execute(
+        select(User).where(User.id == user_id).with_for_update()
+    )
+    return result.scalar_one_or_none()
+
+
+async def update_user(
+    db: AsyncSession,
+    user: User,
+    *,
+    role: str | None = None,
+    display_name: str | None = None,
+    email: str | None = None,
+) -> User:
+    """Update user fields. Only non-None values are applied."""
+    if role is not None:
+        if role not in ("admin", "analyst", "viewer"):
+            raise ValueError(f"无效的角色: {role}")
+        user.role = role
+    if display_name is not None:
+        user.display_name = display_name
+    if email is not None:
+        if email:
+            existing = await db.execute(
+                select(User).where(User.email == email, User.id != user.id)
+            )
+            if existing.scalar_one_or_none():
+                raise ValueError("邮箱已被其他用户使用")
+        user.email = email or None
+    await db.flush()
+    return user
+
+
+async def toggle_active(db: AsyncSession, user: User, is_active: bool) -> User:
+    """Enable or disable a user."""
+    user.is_active = is_active
+    await db.flush()
+    return user
+
+
+async def reset_password(db: AsyncSession, user: User, new_password: str) -> None:
+    """Admin resets a user's password."""
+    user.hashed_password = hash_password(new_password)
+    await db.flush()
+
+
+# ------------------------------------------------------------------
+# Audit log
+# ------------------------------------------------------------------
+
+async def create_audit_log(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    username: str,
+    action: str,
+    target_type: str | None = None,
+    target_id: int | None = None,
+    detail: str | None = None,
+    ip_address: str | None = None,
+) -> AuditLog:
+    log = AuditLog(
+        user_id=user_id,
+        username=username,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        detail=detail[:2000] if detail else detail,
+        ip_address=ip_address,
+    )
+    db.add(log)
+    await db.flush()
+    return log
+
+
+async def list_audit_logs(
+    db: AsyncSession,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    action: str | None = None,
+    user_id: int | None = None,
+) -> tuple[Sequence[AuditLog], int]:
+    """Return paginated audit logs and total count."""
+    query = select(AuditLog)
+    count_query = select(func.count(AuditLog.id))
+
+    if action:
+        query = query.where(AuditLog.action == action)
+        count_query = count_query.where(AuditLog.action == action)
+    if user_id is not None:
+        query = query.where(AuditLog.user_id == user_id)
+        count_query = count_query.where(AuditLog.user_id == user_id)
+
+    total = (await db.execute(count_query)).scalar() or 0
+    result = await db.execute(
+        query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).offset(offset).limit(limit)
+    )
+    return result.scalars().all(), total
