@@ -27,6 +27,9 @@ interface FundItem {
   inception_date: string | null;
   is_private: boolean;
   status: string;
+  nav_status: string | null;
+  data_quality_score: number | null;
+  data_quality_tags: string | null;
 }
 
 interface FundListResponse {
@@ -54,6 +57,19 @@ function FrequencyBadge({ frequency }: { frequency: string }) {
       isDaily ? "bg-blue-50 text-blue-600" : "bg-amber-50 text-amber-600"
     }`}>
       {isDaily ? "日频" : "周频"}
+    </span>
+  );
+}
+
+function QualityBadge({ score }: { score: number | null }) {
+  if (score == null) return <span className="text-[10px] text-muted-foreground">—</span>;
+  const color = score >= 80 ? "bg-emerald-50 text-emerald-700" :
+                score >= 60 ? "bg-blue-50 text-blue-600" :
+                score >= 40 ? "bg-amber-50 text-amber-600" :
+                              "bg-red-50 text-red-600";
+  return (
+    <span className={`inline-block px-1.5 rounded text-[10px] leading-relaxed tabular-nums font-medium ${color}`}>
+      {score}
     </span>
   );
 }
@@ -188,6 +204,26 @@ export default function FundDatabasePage() {
 
   const hasFilters = selectedTypes.size > 0 || selectedSubs.size > 0;
 
+  // 导出CSV
+  async function handleExport() {
+    const params = new URLSearchParams();
+    if (search) params.set("search", search);
+    if (selectedTypes.size > 0) params.set("strategy_type", Array.from(selectedTypes).join(","));
+    if (selectedSubs.size > 0) params.set("strategy_sub", Array.from(selectedSubs).join(","));
+    if (frequency !== "all") params.set("nav_frequency", frequency);
+
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+    const url = `${API_BASE}/funds/export?${params.toString()}`;
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `funds_export_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
   return (
     <div className="space-y-3">
       <PageHeader
@@ -200,7 +236,7 @@ export default function FundDatabasePage() {
                 <FlaskConical className="h-3 w-3" />组合回测
               </Button>
             </Link>
-            <Button variant="outline" size="sm" className="h-7 text-[12px] gap-1">
+            <Button variant="outline" size="sm" className="h-7 text-[12px] gap-1" onClick={handleExport}>
               <Download className="h-3 w-3" />导出
             </Button>
             <Button size="sm" className="h-7 text-[12px] gap-1" onClick={fetchFunds} disabled={loading}>
@@ -345,20 +381,21 @@ export default function FundDatabasePage() {
               <TableHead className="h-7 text-[11px] font-normal text-center cursor-pointer select-none" onClick={() => toggleSort("inception_date")}>
                 <span className="flex items-center justify-center gap-1">成立日期 <SortIcon field="inception_date" /></span>
               </TableHead>
+              <TableHead className="h-7 text-[11px] font-normal text-center">质量</TableHead>
               <TableHead className="h-7 text-[11px] font-normal text-center">操作</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={9} className="h-32 text-center">
+                <TableCell colSpan={10} className="h-32 text-center">
                   <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
                   <p className="text-[12px] text-muted-foreground mt-1">加载中...</p>
                 </TableCell>
               </TableRow>
             ) : sortedItems.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="h-20 text-center text-[12px] text-muted-foreground">
+                <TableCell colSpan={10} className="h-20 text-center text-[12px] text-muted-foreground">
                   暂无符合条件的基金数据
                 </TableCell>
               </TableRow>
@@ -398,6 +435,9 @@ export default function FundDatabasePage() {
                   </TableCell>
                   <TableCell className="py-1.5 text-center tabular-nums text-muted-foreground text-[11px]">
                     {f.inception_date || "—"}
+                  </TableCell>
+                  <TableCell className="py-1.5 text-center">
+                    <QualityBadge score={f.data_quality_score} />
                   </TableCell>
                   <TableCell className="py-1.5 text-center">
                     <button

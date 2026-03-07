@@ -55,3 +55,4 @@ uploads/
 scripts/*.js
 scripts/*.png
 scripts/*.json
+backend/scripts/.expand_progress.json

@@ -11,7 +11,7 @@ from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.importer.valuation_parser import ValuationParser
-from app.models.fund import Fund
+from app.models.fund import Fund, NavHistory
 from app.models.product import Product, ValuationSnapshot, ValuationItem
 from app.schemas.product import (
     ProductCreate,
@@ -396,7 +396,45 @@ class ProductService:
         start_date: date | None = None,
         end_date: date | None = None,
     ) -> list[NavSeriesPoint]:
-        """Get product NAV series from valuation snapshots."""
+        """Get product NAV series.
+
+        Priority: linked fund nav_history (full daily data) > valuation snapshots.
+        Matches product to fund via product_code == fund.filing_number or same name.
+        """
+        # Try to find linked fund with full NAV history
+        product = await self.get_product(db, product_id)
+        if product:
+            fund_query = select(Fund.id).where(Fund.status == "active")
+            if product.product_code:
+                fund_query = fund_query.where(Fund.filing_number == product.product_code)
+            else:
+                fund_query = fund_query.where(Fund.fund_name == product.product_name)
+            fund_result = await db.execute(fund_query)
+            fund_id = fund_result.scalar_one_or_none()
+
+            if fund_id:
+                nav_query = (
+                    select(NavHistory.nav_date, NavHistory.unit_nav, NavHistory.cumulative_nav)
+                    .where(NavHistory.fund_id == fund_id)
+                    .order_by(NavHistory.nav_date)
+                )
+                if start_date:
+                    nav_query = nav_query.where(NavHistory.nav_date >= start_date)
+                if end_date:
+                    nav_query = nav_query.where(NavHistory.nav_date <= end_date)
+                result = await db.execute(nav_query)
+                rows = result.all()
+                if rows:
+                    return [
+                        NavSeriesPoint(
+                            date=row.nav_date,
+                            unit_nav=float(row.unit_nav) if row.unit_nav else None,
+                            total_nav=None,
+                        )
+                        for row in rows
+                    ]
+
+        # Fallback: valuation snapshots
         query = (
             select(
                 ValuationSnapshot.valuation_date,

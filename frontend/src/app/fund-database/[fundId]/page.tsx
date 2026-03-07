@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
-import { ArrowLeft, Loader2, Calendar, TrendingUp, TrendingDown, Activity, BarChart3, FlaskConical } from "lucide-react";
+import { ArrowLeft, Loader2, Calendar, TrendingUp, TrendingDown, BarChart3, FlaskConical, Target } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { fetchApi } from "@/lib/api";
@@ -56,6 +56,39 @@ interface Metrics {
   sharpe_ratio: number | null;
   sortino_ratio: number | null;
   calmar_ratio: number | null;
+}
+
+interface BenchmarkItem {
+  id: number;
+  index_code: string;
+  index_name: string;
+  category: string | null;
+}
+
+interface MonthlyReturn {
+  period: string;
+  fund_return: number;
+  benchmark_return: number;
+  excess_return: number;
+}
+
+interface FundAttribution {
+  fund_id: number;
+  fund_name: string;
+  benchmark_code: string;
+  benchmark_name: string;
+  start_date: string;
+  end_date: string;
+  monthly_returns: MonthlyReturn[];
+  cumulative_fund_return: number;
+  cumulative_benchmark_return: number;
+  cumulative_excess: number;
+  annualized_fund_return: number | null;
+  annualized_benchmark_return: number | null;
+  annualized_excess: number | null;
+  tracking_error: number | null;
+  information_ratio: number | null;
+  win_rate: number | null;
 }
 
 /* ─── Helpers ─── */
@@ -129,18 +162,26 @@ export default function FundDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [interval, setInterval] = useState("inception");
 
+  // Attribution state
+  const [benchmarks, setBenchmarks] = useState<BenchmarkItem[]>([]);
+  const [selectedBenchmark, setSelectedBenchmark] = useState("000300");
+  const [attribution, setAttribution] = useState<FundAttribution | null>(null);
+  const [attrLoading, setAttrLoading] = useState(false);
+
   // 加载基金信息和净值
   useEffect(() => {
     async function load() {
       setLoading(true);
       setError(null);
       try {
-        const [fundRes, navRes] = await Promise.all([
+        const [fundRes, navRes, bmList] = await Promise.all([
           fetchApi<FundDetail>(`/funds/${fundId}`),
           fetchApi<NavResponse>(`/funds/${fundId}/nav`),
+          fetchApi<BenchmarkItem[]>("/benchmarks/"),
         ]);
         setFund(fundRes);
         setNavData(navRes);
+        setBenchmarks(bmList);
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : "加载失败");
       } finally {
@@ -149,6 +190,25 @@ export default function FundDetailPage() {
     }
     load();
   }, [fundId]);
+
+  // 自动加载归因分析（成立以来 vs 默认基准）
+  useEffect(() => {
+    if (!fund || !navData?.records?.length) return;
+    async function loadAttribution() {
+      setAttrLoading(true);
+      try {
+        const attr = await fetchApi<FundAttribution>(
+          `/funds/${fundId}/attribution?benchmark_code=${selectedBenchmark}`
+        );
+        setAttribution(attr);
+      } catch {
+        setAttribution(null);
+      } finally {
+        setAttrLoading(false);
+      }
+    }
+    loadAttribution();
+  }, [fund, navData, fundId, selectedBenchmark]);
 
   // 加载指标（依赖区间）
   useEffect(() => {
@@ -403,6 +463,130 @@ export default function FundDetailPage() {
         ) : (
           <div className="h-32 flex items-center justify-center text-muted-foreground">
             <p className="text-[12px] opacity-60">暂无数据</p>
+          </div>
+        )}
+      </div>
+
+      {/* 业绩归因 (vs 基准) */}
+      <div className="bg-card border border-border rounded">
+        <div className="flex items-center justify-between px-4 py-2 border-b border-border">
+          <span className="text-[13px] font-medium flex items-center gap-1.5">
+            <Target className="h-3.5 w-3.5 text-indigo-500 opacity-70" />
+            业绩归因
+          </span>
+          <div className="flex items-center gap-2">
+            <label className="text-[11px] text-muted-foreground">基准:</label>
+            <select
+              className="h-7 text-[11px] px-2 border border-border rounded bg-background min-w-[160px]"
+              value={selectedBenchmark}
+              onChange={e => setSelectedBenchmark(e.target.value)}
+            >
+              {benchmarks.map(bm => (
+                <option key={bm.index_code} value={bm.index_code}>{bm.index_name}</option>
+              ))}
+            </select>
+            {attrLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+          </div>
+        </div>
+
+        {attribution ? (
+          <div className="space-y-3 p-3">
+            {/* Summary cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+              <MetricCard
+                label="累计超额收益"
+                value={pct(attribution.cumulative_excess)}
+                positive={attribution.cumulative_excess >= 0}
+              />
+              <MetricCard
+                label="年化超额"
+                value={attribution.annualized_excess != null ? pct(attribution.annualized_excess) : "—"}
+                positive={attribution.annualized_excess != null ? attribution.annualized_excess >= 0 : undefined}
+              />
+              <MetricCard
+                label="跟踪误差"
+                value={attribution.tracking_error != null ? pct(attribution.tracking_error) : "—"}
+              />
+              <MetricCard
+                label="信息比率"
+                value={attribution.information_ratio != null ? num(attribution.information_ratio) : "—"}
+              />
+              <MetricCard
+                label="月胜率"
+                value={attribution.win_rate != null ? `${(attribution.win_rate * 100).toFixed(1)}%` : "—"}
+                sub={`${attribution.monthly_returns.length}个月`}
+              />
+              <MetricCard
+                label="基准累计"
+                value={pct(attribution.cumulative_benchmark_return)}
+                sub={attribution.benchmark_name}
+              />
+            </div>
+
+            {/* Monthly excess return bar chart */}
+            {attribution.monthly_returns.length > 0 && (
+              <ReactECharts
+                option={{
+                  tooltip: {
+                    trigger: "axis",
+                    formatter: (params: any) => {
+                      const items = Array.isArray(params) ? params : [params];
+                      let tip = items[0]?.axisValue || "";
+                      for (const p of items) {
+                        tip += `<br/>${p.seriesName}: <b>${(p.value * 100).toFixed(2)}%</b>`;
+                      }
+                      return tip;
+                    },
+                  },
+                  legend: { data: ["基金收益", "基准收益", "超额收益"], textStyle: { fontSize: 10 }, bottom: 0 },
+                  grid: { left: 50, right: 20, top: 15, bottom: 40 },
+                  xAxis: {
+                    type: "category",
+                    data: attribution.monthly_returns.map(m => m.period),
+                    axisLabel: { fontSize: 9, rotate: 45 },
+                  },
+                  yAxis: {
+                    type: "value",
+                    axisLabel: { fontSize: 10, formatter: (v: number) => `${(v * 100).toFixed(0)}%` },
+                    splitLine: { lineStyle: { color: "#f3f4f6" } },
+                  },
+                  series: [
+                    {
+                      name: "基金收益",
+                      type: "bar",
+                      data: attribution.monthly_returns.map(m => m.fund_return),
+                      itemStyle: { color: "#4f46e5" },
+                      barGap: "0%",
+                    },
+                    {
+                      name: "基准收益",
+                      type: "bar",
+                      data: attribution.monthly_returns.map(m => m.benchmark_return),
+                      itemStyle: { color: "#94a3b8" },
+                    },
+                    {
+                      name: "超额收益",
+                      type: "line",
+                      data: attribution.monthly_returns.map(m => m.excess_return),
+                      symbol: "circle",
+                      symbolSize: 4,
+                      lineStyle: { width: 2, color: "#d4a017" },
+                      itemStyle: { color: "#d4a017" },
+                    },
+                  ],
+                }}
+                style={{ height: 280 }}
+                notMerge
+              />
+            )}
+          </div>
+        ) : !attrLoading ? (
+          <div className="h-32 flex items-center justify-center text-muted-foreground text-[12px]">
+            暂无归因数据（需要基金和基准有足够的重叠数据）
+          </div>
+        ) : (
+          <div className="h-32 flex items-center justify-center">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
         )}
       </div>

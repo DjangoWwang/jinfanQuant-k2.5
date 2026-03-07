@@ -61,6 +61,9 @@ class FundResponse(BaseModel):
     data_source: str = "fof99"
     is_private: bool = True
     status: str = "active"
+    nav_status: str | None = "pending"
+    data_quality_score: int | None = None
+    data_quality_tags: str | None = None
 
     model_config = {"from_attributes": True}
 

@@ -191,6 +191,34 @@ export default function ProductDetailPage() {
     loadData();
   }, [loadData]);
 
+  // Auto-trigger attribution when data is loaded
+  useEffect(() => {
+    if (!navSeries.length || attrStart) return;
+    const dates = navSeries.map(n => n.date).sort();
+    if (dates.length >= 2) {
+      setAttrStart(dates[0]);
+      setAttrEnd(dates[dates.length - 1]);
+    }
+  }, [navSeries, attrStart]);
+
+  // Auto-fill report dates from product data
+  useEffect(() => {
+    if (reportStart || !navSeries.length) return;
+    const dates = navSeries.map(n => n.date).sort();
+    if (dates.length >= 2) {
+      const inception = product?.inception_date;
+      setReportStart(inception || dates[0]);
+      setReportEnd(dates[dates.length - 1]);
+    }
+  }, [navSeries, product, reportStart]);
+
+  // Auto-load attribution when dates are set
+  useEffect(() => {
+    if (!attrStart || !attrEnd || attribution) return;
+    loadAttribution();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attrStart, attrEnd]);
+
   async function handleUpload(file: File) {
     setUploading(true);
     setUploadResult(null);
