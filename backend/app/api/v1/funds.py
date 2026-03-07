@@ -20,6 +20,7 @@ from app.models.strategy import StrategyCategory
 from app.schemas.fund import (
     FundCreate, FundUpdate, FundResponse, FundListResponse,
     FundListParams, NavHistoryResponse, NavRecord, MetricsResponse,
+    FundShareClassResponse,
 )
 from app.services.fund_service import fund_service
 from app.engine.metrics import calc_all_metrics
@@ -153,10 +154,11 @@ async def export_funds_csv(
         page_size=200,  # max per query
     )
 
-    # Collect all pages
+    # Collect all pages (with safety limit)
+    MAX_EXPORT_PAGES = 100
     all_funds = []
     page_num = 1
-    while True:
+    while page_num <= MAX_EXPORT_PAGES:
         params.page = page_num
         funds, total = await fund_service.list_funds(db, params)
         all_funds.extend(funds)
@@ -450,3 +452,157 @@ async def get_fund_attribution(
         information_ratio=round(ir, 4) if ir is not None else None,
         win_rate=round(win_rate, 4) if win_rate is not None else None,
     )
+
+
+# ------------------------------------------------------------------
+# 份额关联 (Share Class Association)
+# ------------------------------------------------------------------
+
+@router.get("/{fund_id}/share-classes", response_model=FundShareClassResponse)
+async def get_fund_share_classes(fund_id: int, db: AsyncSession = Depends(get_db)):
+    """获取基金的份额关联信息（同一基金的A/B/C/D类份额）。"""
+    fund = await fund_service.get_fund(db, fund_id)
+    if not fund:
+        raise HTTPException(404, "基金不存在")
+
+    # 如果当前基金是子份额，找到主份额
+    parent_id = fund.parent_fund_id or fund.id
+    if fund.parent_fund_id:
+        parent = await fund_service.get_fund(db, fund.parent_fund_id)
+        parent_name = parent.fund_name if parent else None
+    else:
+        parent_name = fund.fund_name
+
+    # 查找所有关联份额
+    result = await db.execute(
+        select(Fund.id, Fund.fund_name, Fund.share_class, Fund.filing_number, Fund.latest_nav, Fund.latest_nav_date)
+        .where(
+            ((Fund.parent_fund_id == parent_id) | (Fund.id == parent_id))
+            & (Fund.id != fund_id)
+        )
+        .order_by(Fund.share_class.nulls_first())
+    )
+    siblings = [
+        {
+            "id": r.id,
+            "fund_name": r.fund_name,
+            "share_class": r.share_class,
+            "filing_number": r.filing_number,
+            "latest_nav": float(r.latest_nav) if r.latest_nav else None,
+            "latest_nav_date": str(r.latest_nav_date) if r.latest_nav_date else None,
+        }
+        for r in result.all()
+    ]
+
+    return FundShareClassResponse(
+        parent_fund_id=parent_id if parent_id != fund_id else None,
+        parent_fund_name=parent_name if parent_id != fund_id else None,
+        share_classes=siblings,
+    )
+
+
+@router.post("/{fund_id}/link-share-class")
+async def link_share_class(
+    fund_id: int,
+    target_fund_id: int = Query(..., description="要关联的子份额基金ID"),
+    share_class: str = Query(..., description="份额类别: A, B, C, D"),
+    db: AsyncSession = Depends(get_db),
+):
+    """手动关联份额：将 target_fund_id 标记为 fund_id 的子份额。"""
+    parent = await fund_service.get_fund(db, fund_id)
+    if not parent:
+        raise HTTPException(404, "主基金不存在")
+    child = await fund_service.get_fund(db, target_fund_id)
+    if not child:
+        raise HTTPException(404, "子份额基金不存在")
+    if child.parent_fund_id and child.parent_fund_id != fund_id:
+        raise HTTPException(400, f"该基金已关联到其他主基金(ID={child.parent_fund_id})")
+
+    child.parent_fund_id = fund_id
+    child.share_class = share_class.upper()
+    await db.commit()
+    return {"message": f"已将 {child.fund_name} 关联为 {parent.fund_name} 的{share_class}类份额"}
+
+
+@router.post("/auto-detect-share-classes")
+async def auto_detect_share_classes(
+    dry_run: bool = Query(True, description="仅预览不实际关联"),
+    db: AsyncSession = Depends(get_db),
+):
+    """自动检测并关联基金份额（基于名称相似度匹配）。
+
+    规则: "XXX基金" 和 "XXX基金B类" / "XXX基金C类份额" 等视为同一基金的不同份额。
+    """
+    import re
+
+    # 加载所有未关联的基金
+    result = await db.execute(
+        select(Fund.id, Fund.fund_name, Fund.filing_number, Fund.manager_name)
+        .where(Fund.status == "active")
+        .where(Fund.parent_fund_id.is_(None))
+        .order_by(Fund.fund_name)
+    )
+    funds = result.all()
+
+    # 份额后缀模式
+    share_pattern = re.compile(
+        r'^(.+?)'                           # 基金主名称
+        r'[-—]?'                            # 可选分隔符
+        r'([A-Da-d])'                       # 份额字母
+        r'(?:类|类份额|份额)?'               # 可选后缀
+        r'$'
+    )
+
+    # 建立名称到基金的映射
+    name_map: dict[str, list] = {}
+    for f in funds:
+        name_map.setdefault(f.fund_name, []).append(f)
+
+    detected = []
+    linked_ids: set[int] = set()
+
+    for f in funds:
+        if f.id in linked_ids:
+            continue
+        m = share_pattern.match(f.fund_name)
+        if not m:
+            continue
+
+        base_name = m.group(1).rstrip()
+        share_letter = m.group(2).upper()
+
+        # 查找主份额（无后缀的那个）
+        parent_candidates = name_map.get(base_name, [])
+        # 也尝试匹配管理人相同的情况
+        parent = None
+        for pc in parent_candidates:
+            if pc.id != f.id and pc.manager_name == f.manager_name:
+                parent = pc
+                break
+
+        if not parent:
+            continue
+
+        detected.append({
+            "parent_id": parent.id,
+            "parent_name": parent.fund_name,
+            "child_id": f.id,
+            "child_name": f.fund_name,
+            "share_class": share_letter,
+        })
+        linked_ids.add(f.id)
+
+        if not dry_run:
+            child_fund = await fund_service.get_fund(db, f.id)
+            if child_fund:
+                child_fund.parent_fund_id = parent.id
+                child_fund.share_class = share_letter
+
+    if not dry_run and detected:
+        await db.commit()
+
+    return {
+        "total_detected": len(detected),
+        "dry_run": dry_run,
+        "associations": detected,
+    }

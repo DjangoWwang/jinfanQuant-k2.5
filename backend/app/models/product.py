@@ -28,7 +28,7 @@ class Product(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    snapshots = relationship("ValuationSnapshot", back_populates="product", lazy="selectin")
+    snapshots = relationship("ValuationSnapshot", back_populates="product", lazy="selectin", cascade="all, delete-orphan")
 
 
 class ValuationSnapshot(Base):
@@ -41,7 +41,7 @@ class ValuationSnapshot(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
     valuation_date = Column(Date, nullable=False)
     total_nav = Column(Numeric(16, 2), nullable=True)
     unit_nav = Column(Numeric(12, 6), nullable=True)

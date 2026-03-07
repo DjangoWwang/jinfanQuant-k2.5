@@ -64,8 +64,17 @@ class FundResponse(BaseModel):
     nav_status: str | None = "pending"
     data_quality_score: int | None = None
     data_quality_tags: str | None = None
+    parent_fund_id: int | None = None
+    share_class: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class FundShareClassResponse(BaseModel):
+    """份额关联信息"""
+    parent_fund_id: int | None = None
+    parent_fund_name: str | None = None
+    share_classes: list[dict] = Field(default_factory=list)  # [{id, fund_name, share_class, filing_number}]
 
 
 class FundListResponse(BaseModel):

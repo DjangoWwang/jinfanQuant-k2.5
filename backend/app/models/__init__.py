@@ -8,6 +8,7 @@ from app.models.product import Product, ValuationSnapshot, ValuationItem
 from app.models.calendar import TradingCalendar
 from app.models.scrape import DataSource, ScrapeJob
 from app.models.strategy import StrategyCategory
+from app.models.user import User
 
 __all__ = [
     "Fund",
@@ -27,4 +28,5 @@ __all__ = [
     "DataSource",
     "ScrapeJob",
     "StrategyCategory",
+    "User",
 ]

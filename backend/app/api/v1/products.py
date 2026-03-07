@@ -1,5 +1,6 @@
 """Product management API endpoints (CRUD + valuation upload)."""
 
+import logging
 import tempfile
 from datetime import date
 from pathlib import Path
@@ -7,6 +8,8 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from app.database import get_db
 from app.schemas.product import (
@@ -21,6 +24,7 @@ from app.schemas.product import (
     StrategyAttributionResponse,
     FactorExposureResponse,
 )
+from app.config import settings
 from app.services.product_service import product_service
 from app.services.attribution_service import attribution_service
 
@@ -42,7 +46,13 @@ async def list_products(
     products, total = await product_service.list_products(
         db, product_type=product_type, skip=skip, limit=page_size
     )
-    items = [await product_service.to_response(db, p) for p in products]
+    # Batch load snapshot stats to avoid N+1 queries
+    product_ids = [p.id for p in products]
+    stats = await product_service.batch_load_snapshot_stats(db, product_ids)
+    items = [
+        await product_service.to_response(db, p, snapshot_stats=stats.get(p.id))
+        for p in products
+    ]
     return ProductListResponse(items=items, total=total)
 
 
@@ -107,24 +117,38 @@ async def upload_valuation(
     if not product:
         raise HTTPException(status_code=404, detail="产品不存在")
 
-    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
+    if not file.filename or Path(file.filename).suffix.lower() not in (".xlsx", ".xls"):
         raise HTTPException(status_code=400, detail="仅支持 .xlsx/.xls 格式")
 
-    # Save to temp file for openpyxl parsing
+    # Stream to temp file with size limit to avoid memory spike
     suffix = Path(file.filename).suffix
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
-
+    max_size = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    tmp_path = None
     try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = tmp.name
+            total_size = 0
+            while chunk := await file.read(64 * 1024):
+                total_size += len(chunk)
+                if total_size > max_size:
+                    raise HTTPException(status_code=400, detail=f"文件过大，最大允许 {settings.MAX_UPLOAD_SIZE_MB}MB")
+                tmp.write(chunk)
+
         result = await product_service.process_valuation_upload(
             db, product_id, tmp_path
         )
         await db.commit()
         return result
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.exception("估值上传处理失败: product_id=%s, file=%s", product_id, file.filename)
+        raise HTTPException(status_code=500, detail="估值上传处理失败，请检查文件格式后重试")
     finally:
-        Path(tmp_path).unlink(missing_ok=True)
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
 
 
 @router.get("/{product_id}/valuations", response_model=ValuationListResponse)
@@ -179,7 +203,7 @@ async def get_valuation_snapshot(
 @router.get("/{product_id}/strategy-attribution", response_model=StrategyAttributionResponse)
 async def get_strategy_attribution(
     product_id: int,
-    group_by: str = Query("strategy_type", description="分组维度: strategy_type(大类) or strategy_sub(子类)"),
+    group_by: str = Query("strategy_type", pattern=r"^(strategy_type|strategy_sub)$", description="分组维度: strategy_type(一级) or strategy_sub(二级)"),
     db: AsyncSession = Depends(get_db),
 ):
     """Get FOF strategy-level weight allocation and return contribution."""

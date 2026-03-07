@@ -1,6 +1,6 @@
 from sqlalchemy import (
     Column, Integer, String, Boolean, Date, DateTime,
-    Numeric, Text, ForeignKey, UniqueConstraint,
+    Numeric, Text, ForeignKey, UniqueConstraint, Index,
 )
 from sqlalchemy.sql import func
 
@@ -23,6 +23,7 @@ class IndexNav(Base):
     __tablename__ = "index_nav"
     __table_args__ = (
         UniqueConstraint("index_code", "nav_date", name="uq_index_nav_code_date"),
+        Index("ix_index_nav_code", "index_code"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)

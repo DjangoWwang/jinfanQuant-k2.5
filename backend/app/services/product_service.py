@@ -62,7 +62,7 @@ class ProductService:
         skip: int = 0,
         limit: int = 50,
     ) -> tuple[list[Product], int]:
-        query = select(Product).where(Product.is_active == True)
+        query = select(Product).where(Product.is_active.is_(True))
         if product_type:
             query = query.where(Product.product_type == product_type)
 
@@ -89,10 +89,7 @@ class ProductService:
         product = await self.get_product(db, product_id)
         if not product:
             return False
-        # Cascade delete snapshots & items via FK
-        await db.execute(
-            delete(ValuationSnapshot).where(ValuationSnapshot.product_id == product_id)
-        )
+        # FK ondelete=CASCADE + ORM cascade="all, delete-orphan" handle children
         await db.delete(product)
         await db.flush()
         return True
@@ -101,10 +98,26 @@ class ProductService:
     # Product response enrichment
     # ------------------------------------------------------------------
 
-    async def to_response(self, db: AsyncSession, product: Product) -> ProductResponse:
-        """Convert a Product ORM to a response with latest snapshot info."""
-        latest = await self._get_latest_snapshot(db, product.id)
-        snap_count = await self._count_snapshots(db, product.id)
+    async def to_response(
+        self, db: AsyncSession, product: Product,
+        snapshot_stats: dict | None = None,
+    ) -> ProductResponse:
+        """Convert a Product ORM to a response with latest snapshot info.
+
+        If snapshot_stats is provided (from batch_load_snapshot_stats), skip
+        individual queries.
+        """
+        if snapshot_stats:
+            latest_nav = snapshot_stats.get("unit_nav")
+            latest_total_nav = snapshot_stats.get("total_nav")
+            latest_date = snapshot_stats.get("valuation_date")
+            snap_count = snapshot_stats.get("count", 0)
+        else:
+            latest = await self._get_latest_snapshot(db, product.id)
+            snap_count = await self._count_snapshots(db, product.id)
+            latest_nav = float(latest.unit_nav) if latest and latest.unit_nav else None
+            latest_total_nav = float(latest.total_nav) if latest and latest.total_nav else None
+            latest_date = latest.valuation_date if latest else None
 
         return ProductResponse(
             id=product.id,
@@ -123,11 +136,56 @@ class ProductService:
             notes=product.notes,
             is_active=product.is_active,
             created_at=product.created_at,
-            latest_nav=float(latest.unit_nav) if latest and latest.unit_nav else None,
-            latest_total_nav=float(latest.total_nav) if latest and latest.total_nav else None,
-            latest_valuation_date=latest.valuation_date if latest else None,
+            latest_nav=latest_nav,
+            latest_total_nav=latest_total_nav,
+            latest_valuation_date=latest_date,
             snapshot_count=snap_count,
         )
+
+    async def batch_load_snapshot_stats(
+        self, db: AsyncSession, product_ids: list[int]
+    ) -> dict[int, dict]:
+        """Batch load latest snapshot + count for multiple products in 2 queries."""
+        if not product_ids:
+            return {}
+
+        # Latest snapshot per product via window function
+        from sqlalchemy import desc
+        subq = (
+            select(
+                ValuationSnapshot.product_id,
+                ValuationSnapshot.unit_nav,
+                ValuationSnapshot.total_nav,
+                ValuationSnapshot.valuation_date,
+                func.row_number().over(
+                    partition_by=ValuationSnapshot.product_id,
+                    order_by=desc(ValuationSnapshot.valuation_date),
+                ).label("rn"),
+            )
+            .where(ValuationSnapshot.product_id.in_(product_ids))
+            .subquery()
+        )
+        latest_q = select(subq).where(subq.c.rn == 1)
+        latest_rows = (await db.execute(latest_q)).all()
+
+        stats: dict[int, dict] = {pid: {} for pid in product_ids}
+        for row in latest_rows:
+            stats[row.product_id] = {
+                "unit_nav": float(row.unit_nav) if row.unit_nav else None,
+                "total_nav": float(row.total_nav) if row.total_nav else None,
+                "valuation_date": row.valuation_date,
+            }
+
+        # Snapshot count per product
+        count_q = (
+            select(ValuationSnapshot.product_id, func.count().label("cnt"))
+            .where(ValuationSnapshot.product_id.in_(product_ids))
+            .group_by(ValuationSnapshot.product_id)
+        )
+        for row in (await db.execute(count_q)).all():
+            stats.setdefault(row.product_id, {})["count"] = row.cnt
+
+        return stats
 
     async def _get_latest_snapshot(
         self, db: AsyncSession, product_id: int
@@ -163,11 +221,12 @@ class ProductService:
         warnings: list[str] = []
         if parsed["total_nav"] is None:
             warnings.append("无法从估值表中识别资产净值")
-        if parsed["valuation_date"] is None:
-            warnings.append("无法识别估值日期，请手动设置")
 
-        # Create or update snapshot
-        val_date = date.fromisoformat(parsed["valuation_date"]) if parsed["valuation_date"] else date.today()
+        if parsed["valuation_date"] is None:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail="无法从估值表识别估值日期，请检查文件格式")
+
+        val_date = date.fromisoformat(parsed["valuation_date"])
 
         existing = await db.execute(
             select(ValuationSnapshot).where(
@@ -257,9 +316,15 @@ class ProductService:
         self, db: AsyncSession, filing_suffix: str
     ) -> int | None:
         """Find a fund by filing number suffix (case-insensitive)."""
+        # Escape LIKE special characters to prevent pattern injection
+        safe_suffix = (
+            filing_suffix.upper()
+            .replace("%", r"\%")
+            .replace("_", r"\_")
+        )
         result = await db.execute(
             select(Fund.id).where(
-                func.upper(Fund.filing_number).like(f"%{filing_suffix.upper()}")
+                func.upper(Fund.filing_number).like(f"%{safe_suffix}", escape="\\")
             ).limit(1)
         )
         row = result.scalar_one_or_none()
@@ -325,16 +390,19 @@ class ProductService:
         )
         items = list(result.scalars().all())
 
+        # Batch load linked fund names to avoid N+1
+        linked_ids = [i.linked_fund_id for i in items if i.linked_fund_id]
+        fund_name_map: dict[int, str] = {}
+        if linked_ids:
+            fund_result = await db.execute(
+                select(Fund.id, Fund.fund_name).where(Fund.id.in_(linked_ids))
+            )
+            fund_name_map = {row.id: row.fund_name for row in fund_result.all()}
+
         holdings = []
         sub_fund_allocations = []
         for item in items:
-            # Get linked fund name if exists
-            linked_fund_name = None
-            if item.linked_fund_id:
-                fund_result = await db.execute(
-                    select(Fund.fund_name).where(Fund.id == item.linked_fund_id)
-                )
-                linked_fund_name = fund_result.scalar_one_or_none()
+            linked_fund_name = fund_name_map.get(item.linked_fund_id)
 
             holdings.append(ValuationHolding(
                 item_code=item.item_code or "",
