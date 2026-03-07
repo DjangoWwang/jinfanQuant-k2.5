@@ -4,7 +4,7 @@ from app.models.benchmark import (
 )
 from app.models.pool import FundPool
 from app.models.portfolio import Portfolio, PortfolioAllocation, BacktestResult
-from app.models.product import Product, ValuationSnapshot, ValuationItem
+from app.models.product import Product, ValuationSnapshot, ValuationItem, ProductNav
 from app.models.calendar import TradingCalendar
 from app.models.scrape import DataSource, ScrapeJob
 from app.models.strategy import StrategyCategory
@@ -26,6 +26,7 @@ __all__ = [
     "Product",
     "ValuationSnapshot",
     "ValuationItem",
+    "ProductNav",
     "TradingCalendar",
     "DataSource",
     "ScrapeJob",

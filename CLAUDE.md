@@ -176,3 +176,22 @@ python _code_review.py _p2_review_prompt.txt --tag p2 --only codex,kimi
 - 账号: 见 backend/.env
 - 登录地址: fof99.com
 - 正使用账号2 (机构账号, 全量39万+基金)
+
+## 双机协同
+
+本项目同时参与 ClawDesk 跨机器协同体系：
+- 协议仓：`D:\AI\git同步\openclaw-agent-os`
+- 机器名：Django-win
+- 角色：执行节点（FOF 平台开发）
+- 活动同步：每天 21:00 自动推送活动报告到协议仓
+- Mac mini 的 agent 会把本机活动纳入日报/周报素材
+
+## 交叉评审规则
+
+每个 Phase 完成后必须进行多代理交叉评审，协议详见：
+`D:\AI\git同步\openclaw-agent-os\docs\review\cross-review-protocol.md`
+
+评审代理：Claude Code + Codex CLI x2 + Grok CLI
+- Codex CLI 两个实例**必须运行单元测试**，不能只做代码审查
+- 评审异常（欠费/超时）不阻塞主任务，记警告继续推进
+- 评审文档存放于协议仓 `docs/review/` 目录

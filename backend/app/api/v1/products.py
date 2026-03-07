@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
 
 from app.database import get_db
+from app.models.user import User
+from app.api.deps import require_role
 from app.schemas.product import (
     ProductCreate,
     ProductUpdate,
@@ -21,12 +23,18 @@ from app.schemas.product import (
     ValuationSnapshotResponse,
     ValuationListResponse,
     ProductNavResponse,
+    ProductNavCalcResponse,
+    NavCalcPoint,
+    NavCalcResultResponse,
+    NavStatsResponse,
+    NavSeriesPoint,
     StrategyAttributionResponse,
     FactorExposureResponse,
 )
 from app.config import settings
 from app.services.product_service import product_service
 from app.services.attribution_service import attribution_service
+from app.services import nav_calc_service
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -193,8 +201,103 @@ async def get_valuation_snapshot(
 
 
 # ------------------------------------------------------------------
-# NAV series
+# NAV calculation
 # ------------------------------------------------------------------
+
+@router.post("/{product_id}/nav/calculate", response_model=NavCalcResultResponse)
+async def calculate_product_nav(
+    product_id: int,
+    recalculate: bool = Query(False, description="是否重新计算全部"),
+    current_user: User = Depends(require_role("admin", "analyst")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Trigger NAV calculation based on sub-fund holdings in valuation snapshots.
+
+    Requires admin or analyst role.
+    """
+    product = await product_service.get_product(db, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+
+    try:
+        calc_result = await nav_calc_service.calculate_product_nav(
+            db, product_id, recalculate=recalculate,
+        )
+        await db.commit()
+    except ValueError as e:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        logger.exception("NAV calculation failed for product %d", product_id)
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="净值计算失败")
+
+    return NavCalcResultResponse(
+        product_id=product_id,
+        total_days=calc_result.total_days,
+        calculated_days=calc_result.calculated_days,
+        snapshot_days=calc_result.snapshot_days,
+        skipped_days=calc_result.skipped_days,
+        date_range_start=calc_result.date_range[0].isoformat() if calc_result.date_range[0] else None,
+        date_range_end=calc_result.date_range[1].isoformat() if calc_result.date_range[1] else None,
+        warnings=calc_result.warnings,
+    )
+
+
+@router.get("/{product_id}/nav/calculated", response_model=ProductNavCalcResponse)
+async def get_calculated_nav(
+    product_id: int,
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    current_user: User = Depends(require_role("admin", "analyst", "viewer")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get pre-calculated NAV series with detailed breakdown."""
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=400, detail="start_date 不能晚于 end_date")
+
+    product = await product_service.get_product(db, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+
+    records = await nav_calc_service.get_calculated_nav_series(
+        db, product_id, start_date, end_date,
+    )
+    nav_series = [
+        NavCalcPoint(
+            date=r.nav_date,
+            unit_nav=float(r.unit_nav) if r.unit_nav is not None else None,
+            cumulative_nav=float(r.cumulative_nav) if r.cumulative_nav is not None else None,
+            total_nav=float(r.total_nav) if r.total_nav is not None else None,
+            total_shares=float(r.total_shares) if r.total_shares is not None else None,
+            fund_assets=float(r.fund_assets) if r.fund_assets is not None else None,
+            non_fund_assets=float(r.non_fund_assets) if r.non_fund_assets is not None else None,
+            source=r.source,
+        )
+        for r in records
+    ]
+
+    return ProductNavCalcResponse(
+        product_id=product_id,
+        product_name=product.product_name,
+        nav_series=nav_series,
+    )
+
+
+@router.get("/{product_id}/nav/stats", response_model=NavStatsResponse)
+async def get_nav_stats(
+    product_id: int,
+    current_user: User = Depends(require_role("admin", "analyst", "viewer")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get NAV calculation statistics."""
+    product = await product_service.get_product(db, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+
+    stats = await nav_calc_service.get_nav_stats(db, product_id)
+    return NavStatsResponse(product_id=product_id, **stats)
+
 
 # ------------------------------------------------------------------
 # Strategy Attribution & Factor Exposure
@@ -241,10 +344,34 @@ async def get_product_nav(
     end_date: Optional[date] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
+    """Get product NAV series.
+
+    Priority: calculated product_navs > linked fund nav_history > valuation snapshots.
+    """
     product = await product_service.get_product(db, product_id)
     if not product:
         raise HTTPException(status_code=404, detail="产品不存在")
 
+    # Try calculated NAVs first
+    calc_records = await nav_calc_service.get_calculated_nav_series(
+        db, product_id, start_date, end_date,
+    )
+    if calc_records:
+        nav_series = [
+            NavSeriesPoint(
+                date=r.nav_date,
+                unit_nav=float(r.unit_nav) if r.unit_nav is not None else None,
+                total_nav=float(r.total_nav) if r.total_nav is not None else None,
+            )
+            for r in calc_records
+        ]
+        return ProductNavResponse(
+            product_id=product_id,
+            product_name=product.product_name,
+            nav_series=nav_series,
+        )
+
+    # Fallback to existing logic (linked fund / valuation snapshots)
     nav_series = await product_service.get_nav_series(
         db, product_id, start_date, end_date
     )

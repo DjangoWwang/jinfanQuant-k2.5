@@ -151,10 +151,50 @@ class NavSeriesPoint(BaseModel):
     total_nav: float | None = None
 
 
+class NavCalcPoint(BaseModel):
+    date: date
+    unit_nav: float | None = None
+    cumulative_nav: float | None = None
+    total_nav: float | None = None
+    total_shares: float | None = None
+    fund_assets: float | None = None
+    non_fund_assets: float | None = None
+    source: str = "calculated"
+
+
 class ProductNavResponse(BaseModel):
     product_id: int
     product_name: str
     nav_series: list[NavSeriesPoint]
+
+
+class ProductNavCalcResponse(BaseModel):
+    product_id: int
+    product_name: str
+    nav_series: list[NavCalcPoint]
+
+
+class NavCalcResultResponse(BaseModel):
+    product_id: int
+    total_days: int = 0
+    calculated_days: int = 0
+    snapshot_days: int = 0
+    skipped_days: int = 0
+    date_range_start: str | None = None
+    date_range_end: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class NavStatsResponse(BaseModel):
+    product_id: int
+    total_days: int = 0
+    calculated_days: int = 0
+    valuation_days: int = 0
+    has_data: bool = False
+    date_range: dict[str, str | None] = Field(default_factory=dict)
+    latest_nav: float | None = None
+    latest_date: str | None = None
+    latest_total_nav: float | None = None
 
 
 class ValuationListResponse(BaseModel):
