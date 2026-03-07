@@ -34,3 +34,56 @@ export async function fetchApi<T>(
     clearTimeout(timer);
   }
 }
+
+/** Fetch with auth token from localStorage */
+export async function fetchApiAuth<T>(
+  path: string,
+  options?: RequestInit & { timeoutMs?: number }
+): Promise<T> {
+  const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
+  if (!token) throw new Error("AUTH_REQUIRED");
+  const { headers, ...rest } = options ?? {};
+  return fetchApi<T>(path, {
+    ...rest,
+    headers: {
+      ...headers,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+}
+
+/* --- Alert types --- */
+
+export interface AlertEvent {
+  id: number;
+  rule_id: number;
+  target_type: string;
+  target_id: number;
+  target_name: string;
+  metric_value: number;
+  threshold_value: number;
+  severity: string;
+  message: string;
+  is_read: boolean;
+  created_at: string;
+}
+
+export interface AlertDashboard {
+  unread_total: number;
+  alerts_by_severity: Record<string, number>;
+  active_rules: number;
+  top_risks: AlertEvent[];
+  recent_events: AlertEvent[];
+}
+
+export interface RiskRule {
+  id: number;
+  name: string;
+  rule_type: string;
+  target_type: string;
+  target_id: number | null;
+  threshold: number;
+  comparison: string;
+  severity: string;
+  is_active: boolean;
+}

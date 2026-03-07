@@ -472,4 +472,262 @@ class AttributionService:
         return pd.Series(values, index=pd.DatetimeIndex(dates), name=index_code)
 
 
+    # ------------------------------------------------------------------
+    # 3. Fund-level contribution analysis
+    # ------------------------------------------------------------------
+
+    async def get_fund_contribution(
+        self,
+        db: AsyncSession,
+        product_id: int,
+        period_start: date,
+        period_end: date,
+    ) -> list[dict[str, Any]]:
+        """计算产品中每只子基金对组合收益的贡献度。
+
+        通过估值快照获取产品持仓的子基金，计算每只基金在期间内的
+        权重 * 收益 = 贡献，按贡献绝对值降序排列。
+
+        Returns:
+            [{fund_id, fund_name, weight, return, contribution}, ...]
+        """
+        # 获取期间内最近的两个估值快照（期初、期末）
+        snap_start_result = await db.execute(
+            select(ValuationSnapshot)
+            .where(
+                ValuationSnapshot.product_id == product_id,
+                ValuationSnapshot.valuation_date <= period_start,
+            )
+            .order_by(ValuationSnapshot.valuation_date.desc())
+            .limit(1)
+        )
+        snap_start = snap_start_result.scalar_one_or_none()
+
+        # 如果期初没有快照，取期间内最早的
+        if not snap_start:
+            snap_start_result = await db.execute(
+                select(ValuationSnapshot)
+                .where(
+                    ValuationSnapshot.product_id == product_id,
+                    ValuationSnapshot.valuation_date >= period_start,
+                )
+                .order_by(ValuationSnapshot.valuation_date.asc())
+                .limit(1)
+            )
+            snap_start = snap_start_result.scalar_one_or_none()
+
+        snap_end_result = await db.execute(
+            select(ValuationSnapshot)
+            .where(
+                ValuationSnapshot.product_id == product_id,
+                ValuationSnapshot.valuation_date <= period_end,
+            )
+            .order_by(ValuationSnapshot.valuation_date.desc())
+            .limit(1)
+        )
+        snap_end = snap_end_result.scalar_one_or_none()
+
+        if not snap_start or not snap_end:
+            return []
+
+        # 从期末快照获取子基金持仓信息
+        items_result = await db.execute(
+            select(
+                ValuationItem.linked_fund_id,
+                ValuationItem.item_name,
+                ValuationItem.market_value,
+                ValuationItem.value_pct_nav,
+                Fund.fund_name,
+            )
+            .outerjoin(Fund, Fund.id == ValuationItem.linked_fund_id)
+            .where(
+                ValuationItem.snapshot_id == snap_end.id,
+                ValuationItem.item_code.like(f"{_SUBFUND_PREFIX}%"),
+                func.length(ValuationItem.item_code) > 8,
+            )
+        )
+        items = items_result.all()
+
+        if not items:
+            return []
+
+        # 计算总市值用于权重
+        total_mv = sum(float(item.market_value) if item.market_value else 0.0 for item in items)
+        if total_mv <= 0:
+            return []
+
+        # Batch query NAV for all fund_ids to avoid N+1
+        linked_fund_ids = [item.linked_fund_id for item in items if item.linked_fund_id]
+        nav_lookup: dict[int, dict[str, float | None]] = {}
+        if linked_fund_ids:
+            nav_result = await db.execute(
+                select(NavHistory.fund_id, NavHistory.nav_date, NavHistory.unit_nav)
+                .where(
+                    NavHistory.fund_id.in_(linked_fund_ids),
+                    NavHistory.nav_date >= period_start,
+                    NavHistory.nav_date <= period_end,
+                )
+                .order_by(NavHistory.fund_id, NavHistory.nav_date)
+            )
+            from collections import defaultdict
+            fund_nav_series: dict[int, list[tuple]] = defaultdict(list)
+            for row in nav_result.all():
+                fund_nav_series[row.fund_id].append((row.nav_date, float(row.unit_nav)))
+            for fid, series in fund_nav_series.items():
+                if len(series) >= 2:
+                    nav_lookup[fid] = {"start": series[0][1], "end": series[-1][1]}
+
+        contributions = []
+        for item in items:
+            fund_id = item.linked_fund_id
+            fund_name = item.fund_name or item.item_name or "未知基金"
+            mv = float(item.market_value) if item.market_value else 0.0
+            weight = mv / total_mv
+
+            fund_return = None
+            if fund_id and fund_id in nav_lookup:
+                nav_start = nav_lookup[fund_id]["start"]
+                nav_end = nav_lookup[fund_id]["end"]
+                if nav_start and nav_end and nav_start > 0:
+                    fund_return = (nav_end - nav_start) / nav_start
+
+            contribution = weight * fund_return if fund_return is not None else None
+
+            contributions.append({
+                "fund_id": fund_id,
+                "fund_name": fund_name,
+                "weight": round(weight, 6),
+                "return": round(fund_return, 6) if fund_return is not None else None,
+                "contribution": round(contribution, 6) if contribution is not None else None,
+            })
+
+        # 按贡献绝对值降序排列
+        contributions.sort(
+            key=lambda x: abs(x["contribution"]) if x["contribution"] is not None else 0,
+            reverse=True,
+        )
+        return contributions
+
+    # ------------------------------------------------------------------
+    # 4. Correlation matrix computation
+    # ------------------------------------------------------------------
+
+    async def compute_correlation_matrix(
+        self,
+        db: AsyncSession,
+        fund_ids: list[int],
+        period_start: date,
+        period_end: date,
+    ) -> dict[str, Any]:
+        """计算多只基金之间日收益率的相关系数矩阵。
+
+        加载每只基金在指定期间内的净值序列，对齐日期后计算
+        pairwise Pearson相关系数矩阵。
+
+        Returns:
+            {labels: [fund_name, ...], matrix: [[1.0, 0.8, ...], ...],
+             period: {start, end}}
+        """
+        # Batch query: fund names
+        fund_result = await db.execute(
+            select(Fund.id, Fund.fund_name).where(Fund.id.in_(fund_ids))
+        )
+        fund_names = {r.id: r.fund_name for r in fund_result.all()}
+
+        # Batch query: all NAV data in one query
+        nav_result = await db.execute(
+            select(NavHistory.fund_id, NavHistory.nav_date, NavHistory.unit_nav)
+            .where(
+                NavHistory.fund_id.in_(fund_ids),
+                NavHistory.nav_date >= period_start,
+                NavHistory.nav_date <= period_end,
+            )
+            .order_by(NavHistory.fund_id, NavHistory.nav_date)
+        )
+        all_rows = nav_result.all()
+
+        # Group by fund_id in memory
+        from collections import defaultdict
+        fund_navs: dict[int, list[tuple]] = defaultdict(list)
+        for row in all_rows:
+            fund_navs[row.fund_id].append((row.nav_date, float(row.unit_nav)))
+
+        labels: list[str] = []
+        nav_series_dict: dict[str, pd.Series] = {}
+
+        for fund_id in fund_ids:
+            fname = fund_names.get(fund_id)
+            if not fname:
+                continue
+            rows = fund_navs.get(fund_id, [])
+            if len(rows) < 2:
+                continue
+            dates = [r[0] for r in rows]
+            values = [r[1] for r in rows]
+            # Use "name(id)" to avoid duplicate name collision
+            label = f"{fname}({fund_id})" if list(fund_names.values()).count(fname) > 1 else fname
+            series = pd.Series(values, index=pd.DatetimeIndex(dates), name=label)
+            labels.append(label)
+            nav_series_dict[label] = series
+
+        if len(labels) < 2:
+            return {
+                "labels": labels,
+                "matrix": [[1.0]] if labels else [],
+                "period": {
+                    "start": period_start.isoformat(),
+                    "end": period_end.isoformat(),
+                },
+            }
+
+        # 合并为DataFrame并对齐日期（内连接）
+        df = pd.DataFrame(nav_series_dict)
+        df = df.dropna()
+
+        if len(df) < 2:
+            # 数据不足，返回单位矩阵
+            n = len(labels)
+            identity = np.eye(n).tolist()
+            return {
+                "labels": labels,
+                "matrix": identity,
+                "period": {
+                    "start": period_start.isoformat(),
+                    "end": period_end.isoformat(),
+                },
+            }
+
+        # 计算日收益率
+        returns = df.pct_change().dropna()
+
+        if len(returns) < 2:
+            n = len(labels)
+            identity = np.eye(n).tolist()
+            return {
+                "labels": labels,
+                "matrix": identity,
+                "period": {
+                    "start": period_start.isoformat(),
+                    "end": period_end.isoformat(),
+                },
+            }
+
+        # 计算相关系数矩阵
+        corr = returns[labels].corr()
+        # 转为嵌套列表，保留6位小数
+        matrix = [
+            [round(float(corr.iloc[i, j]), 6) for j in range(len(labels))]
+            for i in range(len(labels))
+        ]
+
+        return {
+            "labels": labels,
+            "matrix": matrix,
+            "period": {
+                "start": period_start.isoformat(),
+                "end": period_end.isoformat(),
+            },
+        }
+
+
 attribution_service = AttributionService()

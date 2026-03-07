@@ -77,19 +77,76 @@
 - [x] verify_nav_data.py: API vs DB抽样比对校验
 - [x] 测试: 72个全通过(33 API + 4回测 + 7复权 + 28边界)
 
-### Phase 4-5: 待开始
-- [ ] 产品运营 + 估值表导入
-- [ ] 定时任务(daily_update.py)
-- [ ] 仪表盘完善 + 前端体验优化
+### Phase 4: 产品运营 - 完成
+- [x] 产品运营模块 + 估值表导入 + 移动端API
+
+### Phase 5: 仪表盘+归因 - 完成
+- [x] dashboard+nav+crawl: 首页联动修复 + 产品净值接入 + 并发爬虫
+- [x] FOF策略归因 + 因子暴露分析
+- [x] PDF报告自动生成 + Brinson归因分析
+
+### P0: 基础设施优化 - 完成
+- [x] JWT认证(bcrypt+PyJWT) + RBAC(admin/analyst/viewer)
+- [x] 基金份额关联(parent_fund_id自引用, 319个A/B/C/D份额自动检测)
+- [x] 组合服务完整实现(CRUD+回测编排)
+- [x] Redis缓存层(优雅降级+60秒自动重连)
+- [x] Celery异步任务(回测/因子分析/报告)
+- [x] 数据库索引(DESC复合索引+GIN三元组)
+- [x] 三方交叉评审(Codex+MiniMax+Kimi) + 全部Critical/Major修复
+
+### P1: 下一阶段
+- [ ] P1-6: 风险预警中心
+- [ ] P1-7: Brinson归因增强
+- [ ] P1-8: 增量ETL管道
+- [ ] P1-9: 报告导出升级
+- [ ] P1-10: 前端交互增强
+
+## 三方交叉评审机制（每个开发阶段必须执行）
+
+### 流程
+1. 阶段开发完成后，**先评审再推进下一阶段**
+2. 用 `_code_review.py` 自动生成 prompt 并发送三方评审
+3. 汇总三方结果，修复所有 Critical + Major 后方可继续
+
+### 评审命令
+```bash
+# 1. 准备 prompt 文件（将变更代码打包 + 评审维度说明）
+# 2. 发送三方评审
+python _code_review.py <prompt_file> --tag <phase>
+
+# 示例
+python _code_review.py _p1_review_prompt.txt --tag p1
+python _code_review.py _p2_review_prompt.txt --tag p2 --only codex,kimi
+```
+
+### 三方评审人
+| 评审人 | 特点 | 调用方式 |
+|--------|------|----------|
+| **Codex (GPT-5.4)** | 最严厉，从攻击者视角审视安全问题 | API streaming |
+| **MiniMax (MiniMax-M1)** | 务实均衡，修复建议直接可用 | API |
+| **Kimi** | 关注运行时风险，异步/资源泄漏敏感 | CLI (`--quiet`) |
+
+### Prompt 模板结构
+```
+1. 变更概述（本阶段做了什么，几个模块）
+2. 评审维度（安全性/数据完整性/性能/代码质量/架构）
+3. 输出要求（总分/PASS-FAIL/问题清单含级别+位置+修复建议）
+4. 代码原文（=== file_path === 格式拼接所有变更文件）
+```
+
+### 评审标准
+- **Critical**: 必须修复，阻断上线
+- **Major**: 强烈建议修复，影响稳定性/安全/性能
+- **Minor**: 可选优化，不阻断
+- 三方中任一给出 Critical → 必须修复后重新评审或说明理由
+- 目标分数：三方均 ≥ 70 分
 
 ## 数据状态
-- 基金: 918只(有fof99_fund_id的915只可爬取)
-- 有NAV数据: 708只(约150只日频, 约520只周频), 332,938条净值记录
-- pending: 207只(限流未完成, 可用--resume-from继续)
-- 指数: 3只核心指数(沪深300/中证500/中证1000), 98,423条数据
-- NAV数据范围: 2002-01-04 ~ 2026-03-06
-- 数据质量: 615只(86.5%)评分>=80, 509只评分>=90
-- 交替模式基金: 179只(unit_nav/cumulative_nav交替不一致, 自动过滤处理)
+- 基金: 3,628只, 份额关联: 319组(A/B/C/D类自动检测)
+- NAV数据: 885,147条净值记录
+- 指数: 3只核心指数(沪深300/中证500/中证1000)
+- 用户: 2个(admin + analyst1), Alembic head: b2c3d4e5f6g7
+- 服务端口: backend 8003, frontend 3000
 
 ## 编码约定
 - 后端: Python async/await, type hints, ruff格式化, 120字符行宽

@@ -9,6 +9,7 @@ from app.models.calendar import TradingCalendar
 from app.models.scrape import DataSource, ScrapeJob
 from app.models.strategy import StrategyCategory
 from app.models.user import User
+from app.models.alert import RiskRule, AlertEvent
 
 __all__ = [
     "Fund",
@@ -29,4 +30,6 @@ __all__ = [
     "ScrapeJob",
     "StrategyCategory",
     "User",
+    "RiskRule",
+    "AlertEvent",
 ]

@@ -11,6 +11,7 @@ import {
   Briefcase,
   Settings,
   ChevronDown,
+  ShieldAlert,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
@@ -36,6 +37,7 @@ const navItems: NavItem[] = [
     ],
   },
   { label: "产品运营", href: "/product-ops", icon: Briefcase },
+  { label: "风险预警", href: "/risk-alerts", icon: ShieldAlert },
   { label: "系统设置", href: "/settings", icon: Settings },
 ];
 

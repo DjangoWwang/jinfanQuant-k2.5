@@ -24,6 +24,10 @@ celery_app.conf.update(
         "app.tasks.analysis.*": {"queue": "analysis"},
         "app.tasks.scraping.*": {"queue": "scraping"},
         "app.tasks.reports.*": {"queue": "reports"},
+        # ETL / ingestion tasks route to the scraping queue
+        "app.tasks.analysis.refresh_nav_incremental": {"queue": "scraping"},
+        "app.tasks.analysis.refresh_nav_full": {"queue": "scraping"},
+        "app.tasks.analysis.daily_data_refresh": {"queue": "scraping"},
     },
 )
 

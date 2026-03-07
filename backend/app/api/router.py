@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import funds, pools, comparison, portfolios, backtest, products, valuation, benchmarks, crawler, reports, mobile, auth
+from app.api.v1 import funds, pools, comparison, portfolios, backtest, products, valuation, benchmarks, crawler, reports, mobile, auth, alerts, etl
 
 api_router = APIRouter()
 
@@ -17,3 +17,5 @@ api_router.include_router(benchmarks.router)
 api_router.include_router(crawler.router)
 api_router.include_router(reports.router)
 api_router.include_router(mobile.router)
+api_router.include_router(alerts.router)
+api_router.include_router(etl.router)

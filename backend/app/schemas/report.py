@@ -15,6 +15,27 @@ class ReportGenerateRequest(BaseModel):
     benchmark_id: int | None = None
 
 
+class AsyncReportRequest(BaseModel):
+    report_type: str = Field("monthly", pattern=r"^(monthly|weekly)$")
+    period_start: date
+    period_end: date
+    benchmark_id: int | None = None
+    format: str = Field("pdf", pattern=r"^(pdf|excel)$")
+
+
+class AsyncReportResponse(BaseModel):
+    task_id: str
+    product_id: int
+    format: str
+    status: str = "queued"
+
+
+class TaskStatusResponse(BaseModel):
+    task_id: str
+    status: str
+    result: dict | None = None
+
+
 class AttributionCategoryResponse(BaseModel):
     category: str
     category_name: str
@@ -51,3 +72,31 @@ class AttributionResponse(BaseModel):
     cumulative_selection: float = 0.0
     cumulative_interaction: float = 0.0
     aggregated_categories: list[AttributionCategoryResponse] = Field(default_factory=list)
+
+
+class FundContributionItem(BaseModel):
+    fund_id: int | None = None
+    fund_name: str
+    weight: float = 0.0
+    return_: float | None = Field(None, alias="return")
+    contribution: float | None = None
+
+    model_config = {"populate_by_name": True, "serialize_by_alias": True}
+
+
+class FundContributionResponse(BaseModel):
+    product_id: int
+    period_start: date
+    period_end: date
+    contributions: list[FundContributionItem] = Field(default_factory=list)
+
+
+class CorrelationPeriod(BaseModel):
+    start: str
+    end: str
+
+
+class CorrelationMatrixResponse(BaseModel):
+    labels: list[str] = Field(default_factory=list)
+    matrix: list[list[float]] = Field(default_factory=list)
+    period: CorrelationPeriod

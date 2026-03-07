@@ -1,6 +1,6 @@
 """爬虫数据入库服务 — 将火富牛爬取数据写入数据库。
 
-流程: Fof99Client → Scraper → 标准化 → DB upsert
+流程: Fof99Client → Scraper → 标准化 → 校验 → DB upsert
 """
 
 from __future__ import annotations
@@ -8,9 +8,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -259,23 +260,35 @@ class IngestionService:
     async def _upsert_nav_batch(
         self, db: AsyncSession, fund_id: int, records: list[dict[str, Any]]
     ) -> int:
-        """批量upsert净值记录。"""
+        """批量upsert净值记录（含数据校验）。"""
         if not records:
             return 0
 
         rows = []
+        skipped = 0
         for r in records:
             nav_date = _parse_date(r["nav_date"])
             if not nav_date:
+                skipped += 1
                 continue
-            rows.append({
+            row = {
                 "fund_id": fund_id,
                 "nav_date": nav_date,
                 "unit_nav": r.get("unit_nav"),
                 "cumulative_nav": r.get("cumulative_nav"),
                 "daily_return": r.get("change_pct"),
                 "data_source": "fof99",
-            })
+            }
+            if not self._validate_nav_record(row):
+                skipped += 1
+                continue
+            rows.append(row)
+
+        if skipped > 0:
+            logger.info("基金 %s: 跳过 %d 条无效净值记录", fund_id, skipped)
+
+        if not rows:
+            return 0
 
         stmt = pg_insert(NavHistory).values(rows)
         stmt = stmt.on_conflict_do_update(
@@ -288,6 +301,163 @@ class IngestionService:
         )
         await db.execute(stmt)
         return len(rows)
+
+    # ------------------------------------------------------------------
+    # 数据校验
+    # ------------------------------------------------------------------
+
+    def _validate_nav_record(self, record: dict) -> bool:
+        """校验单条净值记录的合法性。
+
+        检查:
+        - nav_date 是有效日期且不在未来
+        - unit_nav / cumulative_nav 为正数（如有值）
+        - daily_return 在合理范围内（±50%）
+
+        Returns:
+            True 表示通过校验, False 表示应跳过该记录
+        """
+        # 日期校验
+        nav_date = record.get("nav_date")
+        if nav_date is None:
+            logger.debug("校验失败: nav_date 为空")
+            return False
+        if isinstance(nav_date, str):
+            nav_date = _parse_date(nav_date)
+            if nav_date is None:
+                logger.debug("校验失败: nav_date 格式无效 %s", record.get("nav_date"))
+                return False
+        if nav_date > date.today():
+            logger.debug("校验失败: nav_date %s 在未来", nav_date)
+            return False
+
+        # 净值校验: 必须为正数
+        for field in ("unit_nav", "cumulative_nav"):
+            val = record.get(field)
+            if val is not None:
+                try:
+                    num = Decimal(str(val))
+                    if num <= 0:
+                        logger.debug("校验失败: %s=%s 非正数 (fund_id=%s, date=%s)",
+                                     field, val, record.get("fund_id"), nav_date)
+                        return False
+                except (InvalidOperation, ValueError, TypeError):
+                    logger.debug("校验失败: %s=%s 无法解析为数字", field, val)
+                    return False
+
+        # 日收益率校验: ±50% 范围
+        daily_return = record.get("daily_return")
+        if daily_return is not None:
+            try:
+                ret = float(daily_return)
+                if ret < -0.5 or ret > 0.5:
+                    logger.debug("校验失败: daily_return=%s 超出±50%%范围 (fund_id=%s, date=%s)",
+                                 daily_return, record.get("fund_id"), nav_date)
+                    return False
+            except (ValueError, TypeError):
+                logger.debug("校验失败: daily_return=%s 无法解析", daily_return)
+                return False
+
+        return True
+
+    # ------------------------------------------------------------------
+    # 全量净值重新入库
+    # ------------------------------------------------------------------
+
+    async def ingest_fund_nav_full(
+        self,
+        db: AsyncSession,
+        fund_id: int,
+        delay: float = 0.5,
+    ) -> dict[str, int]:
+        """全量重新爬取并入库单只基金的净值数据。
+
+        1. 删除该基金的所有现有净值记录
+        2. 重新爬取全部历史数据（无 start_date 限制）
+        3. 重新计算数据质量
+
+        Returns:
+            {"records_upserted": N, "deleted": M}
+        """
+        result = await db.execute(select(Fund).where(Fund.id == fund_id))
+        fund = result.scalar_one_or_none()
+        if not fund:
+            raise ValueError(f"基金 id={fund_id} 不存在")
+
+        encode_id = fund.fof99_fund_id
+        if not encode_id:
+            raise ValueError(f"基金 id={fund_id} 无 fof99_fund_id，无法爬取")
+
+        # 步骤1: 删除现有净值
+        del_result = await db.execute(
+            delete(NavHistory).where(NavHistory.fund_id == fund_id)
+        )
+        deleted_count = del_result.rowcount
+        logger.info("基金 %s (id=%d): 已删除 %d 条历史净值", fund.fund_name[:20], fund_id, deleted_count)
+
+        # 步骤2: 全量爬取（无 start_date）
+        nav_records, freq = await self._nav_scraper.fetch_nav_with_frequency(
+            encode_id, start_date=None
+        )
+
+        records_upserted = 0
+        if nav_records:
+            if freq in ("daily", "weekly"):
+                fund.nav_frequency = freq
+
+            records_upserted = await self._upsert_nav_batch(db, fund.id, nav_records)
+
+            # 更新 latest_nav
+            last = nav_records[-1]
+            fund.latest_nav = last.get("unit_nav")
+            fund.latest_nav_date = _parse_date(last.get("nav_date"))
+            fund.nav_status = "has_data"
+        else:
+            fund.nav_status = "no_data"
+
+        # 步骤3: 简单数据质量评估
+        await self._update_data_quality(db, fund)
+
+        await db.flush()
+        logger.info("基金 %s 全量净值重建完成: 删除=%d, 新增=%d", fund.fund_name[:20], deleted_count, records_upserted)
+
+        return {"records_upserted": records_upserted, "deleted": deleted_count}
+
+    async def _update_data_quality(self, db: AsyncSession, fund: Fund) -> None:
+        """更新基金数据质量评分。"""
+        result = await db.execute(
+            select(func.count()).select_from(NavHistory).where(NavHistory.fund_id == fund.id)
+        )
+        nav_count = result.scalar() or 0
+
+        if nav_count == 0:
+            fund.data_quality_score = 0
+            fund.data_quality_tags = "no_data"
+            return
+
+        tags = []
+        score = 100
+
+        # 数据量评估
+        if nav_count < 12:
+            tags.append("sparse")
+            score -= 30
+        elif nav_count < 52:
+            tags.append("limited")
+            score -= 10
+
+        # 检查最新数据时效性
+        if fund.latest_nav_date:
+            days_stale = (date.today() - fund.latest_nav_date).days
+            if days_stale > 90:
+                tags.append("stale")
+                score -= 20
+            elif days_stale > 30:
+                tags.append("slightly_stale")
+                score -= 5
+
+        fund.data_quality_score = max(0, score)
+        fund.data_quality_tags = ",".join(tags) if tags else None
 
     # ------------------------------------------------------------------
     # 指数数据入库
