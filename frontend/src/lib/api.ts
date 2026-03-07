@@ -35,21 +35,56 @@ export async function fetchApi<T>(
   }
 }
 
+/** Single source of truth for auth token */
+function getAuthToken(): string {
+  if (typeof window === "undefined") throw new Error("AUTH_REQUIRED");
+  const token = localStorage.getItem("auth_token");
+  if (!token) throw new Error("AUTH_REQUIRED");
+  return token;
+}
+
+function withAuthHeaders(headers?: HeadersInit): HeadersInit {
+  return { ...headers, Authorization: `Bearer ${getAuthToken()}` };
+}
+
 /** Fetch with auth token from localStorage */
 export async function fetchApiAuth<T>(
   path: string,
   options?: RequestInit & { timeoutMs?: number }
 ): Promise<T> {
-  const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
-  if (!token) throw new Error("AUTH_REQUIRED");
   const { headers, ...rest } = options ?? {};
   return fetchApi<T>(path, {
     ...rest,
-    headers: {
-      ...headers,
-      Authorization: `Bearer ${token}`,
-    },
+    headers: withAuthHeaders(headers),
   });
+}
+
+/** Fetch with auth, returning a Blob (for file downloads) */
+export async function fetchApiBlobAuth(
+  path: string,
+  options?: RequestInit & { timeoutMs?: number }
+): Promise<Blob> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, headers, ...rest } = options ?? {};
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      ...rest,
+      headers: withAuthHeaders(headers),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      let msg = `API error: ${res.status}`;
+      try {
+        const body = await res.json();
+        if (body.detail) msg = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+      } catch { /* ignore parse error */ }
+      throw new Error(msg);
+    }
+    return res.blob();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /* --- Alert types --- */

@@ -12,6 +12,8 @@ import {
   Settings,
   ChevronDown,
   ShieldAlert,
+  FileBarChart,
+  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
@@ -37,7 +39,9 @@ const navItems: NavItem[] = [
     ],
   },
   { label: "产品运营", href: "/product-ops", icon: Briefcase },
+  { label: "报告中心", href: "/reports", icon: FileBarChart },
   { label: "风险预警", href: "/risk-alerts", icon: ShieldAlert },
+  { label: "数据管理", href: "/data-management", icon: RefreshCw },
   { label: "系统设置", href: "/settings", icon: Settings },
 ];
 
@@ -87,7 +91,7 @@ export function Sidebar() {
                 </button>
                 {isExp && (
                   <div className="ml-4 mt-0.5 space-y-0.5 border-l border-sidebar-border pl-2">
-                    {item.children!.map((child) => (
+                    {item.children?.map((child) => (
                       <Link
                         key={child.href}
                         href={child.href}
