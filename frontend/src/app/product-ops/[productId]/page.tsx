@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import {
   ArrowLeft, Loader2, Upload, FileSpreadsheet, ChevronDown, ChevronRight,
   Calendar, Building2, DollarSign, TrendingUp, BarChart3, Eye, FileText,
+  PieChart, Activity, Target,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -130,6 +131,81 @@ interface AttributionResult {
   aggregated_categories: AttributionCategory[];
 }
 
+/* Strategy Attribution types */
+interface StrategyFundDetail {
+  fund_name: string;
+  fund_id: number | null;
+  strategy_sub: string;
+  market_value: number;
+  weight_pct: number;
+}
+
+interface StrategyWeight {
+  weight: number;
+  weight_pct_nav: number;
+  market_value: number;
+  fund_count: number;
+  funds: StrategyFundDetail[];
+}
+
+interface SnapshotStrategyData {
+  valuation_date: string;
+  unit_nav: number | null;
+  total_nav: number | null;
+  strategy_weights: Record<string, StrategyWeight>;
+}
+
+interface ReturnContrib {
+  avg_weight: number;
+  strategy_return: number | null;
+  contribution: number | null;
+}
+
+interface PeriodContribution {
+  period_start: string;
+  period_end: string;
+  total_return: number;
+  contributions: Record<string, ReturnContrib>;
+}
+
+interface StrategyAttribution {
+  snapshots: SnapshotStrategyData[];
+  strategy_types: string[];
+  return_contribution: PeriodContribution[];
+}
+
+/* Factor Exposure types */
+interface FactorBeta {
+  beta: number | null;
+  t_stat: number | null;
+  se: number | null;
+}
+
+interface StaticRegression {
+  alpha: number | null;
+  alpha_annualized: number | null;
+  alpha_t_stat: number | null;
+  r_squared: number | null;
+  betas: Record<string, FactorBeta>;
+}
+
+interface RollingPoint {
+  date: string;
+  r_squared: number | null;
+  betas: Record<string, FactorBeta>;
+}
+
+interface FactorExposure {
+  product_id: number;
+  data_points: number;
+  date_range: { start: string; end: string };
+  factors: Record<string, string>;
+  static: StaticRegression | null;
+  rolling: RollingPoint[];
+  rolling_window: number;
+  error: string | null;
+}
+
 /* --- Page --- */
 
 export default function ProductDetailPage() {
@@ -153,6 +229,14 @@ export default function ProductDetailPage() {
   const [attrEnd, setAttrEnd] = useState("");
   const [attribution, setAttribution] = useState<AttributionResult | null>(null);
   const [attrLoading, setAttrLoading] = useState(false);
+
+  // Strategy attribution state
+  const [strategyAttr, setStrategyAttr] = useState<StrategyAttribution | null>(null);
+  const [strategyLoading, setStrategyLoading] = useState(false);
+
+  // Factor exposure state
+  const [factorExposure, setFactorExposure] = useState<FactorExposure | null>(null);
+  const [factorLoading, setFactorLoading] = useState(false);
 
   // Report generation state
   const [reportDialogOpen, setReportDialogOpen] = useState(false);
@@ -180,6 +264,12 @@ export default function ProductDetailPage() {
         );
         setLatestSnapshot(latest);
       }
+
+      // Load strategy attribution & factor exposure in parallel
+      Promise.all([
+        fetchApi<StrategyAttribution>(`/products/${productId}/strategy-attribution`).then(setStrategyAttr).catch(() => {}),
+        fetchApi<FactorExposure>(`/products/${productId}/factor-exposure?window=60`).then(setFactorExposure).catch(() => {}),
+      ]);
     } catch (e) {
       console.error("Load failed:", e);
     } finally {
@@ -470,7 +560,9 @@ export default function ProductDetailPage() {
       <Tabs defaultValue="overview">
         <TabsList className="h-8">
           <TabsTrigger value="overview" className="text-[12px] h-7 px-3">概览</TabsTrigger>
-          <TabsTrigger value="attribution" className="text-[12px] h-7 px-3">归因分析</TabsTrigger>
+          <TabsTrigger value="strategy" className="text-[12px] h-7 px-3">策略归因</TabsTrigger>
+          <TabsTrigger value="factor" className="text-[12px] h-7 px-3">因子暴露</TabsTrigger>
+          <TabsTrigger value="attribution" className="text-[12px] h-7 px-3">基准归因</TabsTrigger>
           <TabsTrigger value="holdings" className="text-[12px] h-7 px-3">持仓明细</TabsTrigger>
           <TabsTrigger value="history" className="text-[12px] h-7 px-3">估值历史</TabsTrigger>
         </TabsList>
@@ -550,7 +642,422 @@ export default function ProductDetailPage() {
           )}
         </TabsContent>
 
-        {/* Attribution tab */}
+        {/* Strategy Attribution tab */}
+        <TabsContent value="strategy" className="mt-3 space-y-4">
+          {strategyAttr && strategyAttr.snapshots.length > 0 ? (
+            <>
+              {/* Strategy weight stacked bar chart */}
+              <div className="bg-card border border-border rounded p-3">
+                <h3 className="text-[13px] font-medium mb-2 flex items-center gap-1.5">
+                  <PieChart className="h-3.5 w-3.5 text-indigo-500 opacity-70" />
+                  历史策略权重变化
+                </h3>
+                <ReactECharts
+                  option={{
+                    tooltip: {
+                      trigger: "axis",
+                      axisPointer: { type: "shadow" },
+                      formatter: (params: any) => {
+                        if (!Array.isArray(params) || !params.length) return "";
+                        let tip = `<b>${params[0].axisValue}</b>`;
+                        for (const p of params) {
+                          if (p.value > 0) tip += `<br/>${p.seriesName}: ${(p.value * 100).toFixed(1)}%`;
+                        }
+                        return tip;
+                      },
+                    },
+                    legend: {
+                      data: strategyAttr.strategy_types,
+                      textStyle: { fontSize: 10 },
+                      bottom: 0,
+                    },
+                    grid: { left: 50, right: 20, top: 15, bottom: 40 },
+                    xAxis: {
+                      type: "category",
+                      data: strategyAttr.snapshots.map(s => s.valuation_date),
+                      axisLabel: { fontSize: 10 },
+                    },
+                    yAxis: {
+                      type: "value",
+                      max: 1,
+                      axisLabel: { fontSize: 10, formatter: (v: number) => `${(v * 100).toFixed(0)}%` },
+                    },
+                    series: strategyAttr.strategy_types.map(st => ({
+                      name: st,
+                      type: "bar",
+                      stack: "total",
+                      emphasis: { focus: "series" },
+                      data: strategyAttr.snapshots.map(snap => {
+                        const w = snap.strategy_weights[st];
+                        return w ? w.weight : 0;
+                      }),
+                    })),
+                    color: ["#2563eb", "#7c3aed", "#db2777", "#ea580c", "#16a34a", "#0891b2", "#64748b", "#d4a017"],
+                  }}
+                  style={{ height: 320 }}
+                  notMerge
+                />
+              </div>
+
+              {/* Latest strategy allocation pie + detail */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* Pie chart */}
+                <div className="bg-card border border-border rounded p-3">
+                  <h3 className="text-[13px] font-medium mb-2">最新策略配置</h3>
+                  {(() => {
+                    const latest = strategyAttr.snapshots[strategyAttr.snapshots.length - 1];
+                    const pieData = Object.entries(latest.strategy_weights)
+                      .map(([st, w]) => ({ name: st, value: parseFloat((w.weight * 100).toFixed(1)) }))
+                      .sort((a, b) => b.value - a.value);
+                    return (
+                      <ReactECharts
+                        option={{
+                          tooltip: { trigger: "item", formatter: "{b}: {c}% ({d}%)" },
+                          series: [{
+                            type: "pie",
+                            radius: ["30%", "65%"],
+                            label: { fontSize: 11, formatter: "{b}\n{d}%" },
+                            data: pieData,
+                          }],
+                          color: ["#2563eb", "#7c3aed", "#db2777", "#ea580c", "#16a34a", "#0891b2", "#64748b", "#d4a017"],
+                        }}
+                        style={{ height: 280 }}
+                        notMerge
+                      />
+                    );
+                  })()}
+                </div>
+
+                {/* Strategy detail table */}
+                <div className="bg-card border border-border rounded overflow-hidden">
+                  <h3 className="text-[13px] font-medium p-3 pb-2">策略明细 ({strategyAttr.snapshots[strategyAttr.snapshots.length - 1].valuation_date})</h3>
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/40">
+                        <TableHead className="h-8 text-[11px] font-normal">策略</TableHead>
+                        <TableHead className="h-8 text-[11px] font-normal text-right">权重</TableHead>
+                        <TableHead className="h-8 text-[11px] font-normal text-right">市值</TableHead>
+                        <TableHead className="h-8 text-[11px] font-normal text-center">基金数</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(() => {
+                        const latest = strategyAttr.snapshots[strategyAttr.snapshots.length - 1];
+                        return Object.entries(latest.strategy_weights)
+                          .sort(([, a], [, b]) => b.weight - a.weight)
+                          .map(([st, w]) => (
+                            <TableRow key={st} className="text-[12px]">
+                              <TableCell className="py-2 font-medium">{st}</TableCell>
+                              <TableCell className="py-2 text-right tabular-nums">{(w.weight * 100).toFixed(1)}%</TableCell>
+                              <TableCell className="py-2 text-right tabular-nums">{fmtMoney(w.market_value)}</TableCell>
+                              <TableCell className="py-2 text-center">{w.fund_count}</TableCell>
+                            </TableRow>
+                          ));
+                      })()}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+
+              {/* Return contribution */}
+              {strategyAttr.return_contribution.length > 0 && (
+                <div className="bg-card border border-border rounded p-3">
+                  <h3 className="text-[13px] font-medium mb-2 flex items-center gap-1.5">
+                    <Activity className="h-3.5 w-3.5 text-green-600 opacity-70" />
+                    收益贡献分解
+                  </h3>
+                  {strategyAttr.return_contribution.map((rc, idx) => {
+                    const contribs = Object.entries(rc.contributions)
+                      .filter(([, c]) => c.contribution != null)
+                      .sort(([, a], [, b]) => (b.contribution ?? 0) - (a.contribution ?? 0));
+                    return (
+                      <div key={idx} className="mb-3">
+                        <p className="text-[11px] text-muted-foreground mb-2">
+                          {rc.period_start} ~ {rc.period_end} | 总收益: <span className={`font-medium ${rc.total_return >= 0 ? "text-green-600" : "text-red-600"}`}>{(rc.total_return * 100).toFixed(2)}%</span>
+                        </p>
+                        <ReactECharts
+                          option={{
+                            tooltip: {
+                              trigger: "axis",
+                              formatter: (params: any) => {
+                                if (!Array.isArray(params)) return "";
+                                let tip = params[0]?.name || "";
+                                for (const p of params) {
+                                  tip += `<br/>${p.seriesName}: ${p.value != null ? (p.value * 100).toFixed(3) + "%" : "N/A"}`;
+                                }
+                                return tip;
+                              },
+                            },
+                            grid: { left: 80, right: 30, top: 15, bottom: 25 },
+                            xAxis: {
+                              type: "category",
+                              data: contribs.map(([st]) => st),
+                              axisLabel: { fontSize: 10 },
+                            },
+                            yAxis: {
+                              type: "value",
+                              axisLabel: { fontSize: 10, formatter: (v: number) => `${(v * 100).toFixed(2)}%` },
+                            },
+                            series: [
+                              {
+                                name: "策略收益",
+                                type: "bar",
+                                data: contribs.map(([, c]) => c.strategy_return),
+                                itemStyle: { color: "#94a3b8" },
+                                barGap: "0%",
+                              },
+                              {
+                                name: "收益贡献",
+                                type: "bar",
+                                data: contribs.map(([, c]) => c.contribution),
+                                itemStyle: {
+                                  color: (params: any) => (params.value ?? 0) >= 0 ? "#16a34a" : "#dc2626",
+                                },
+                              },
+                            ],
+                            legend: { data: ["策略收益", "收益贡献"], textStyle: { fontSize: 10 }, bottom: 0 },
+                          }}
+                          style={{ height: 240 }}
+                          notMerge
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="bg-card border border-border rounded p-8 text-center text-muted-foreground text-[12px]">
+              暂无策略归因数据。请先上传估值表以获取子基金持仓信息。
+            </div>
+          )}
+        </TabsContent>
+
+        {/* Factor Exposure tab */}
+        <TabsContent value="factor" className="mt-3 space-y-4">
+          {factorExposure && !factorExposure.error && factorExposure.static ? (
+            <>
+              {/* Static regression summary */}
+              <div className="bg-card border border-border rounded p-3">
+                <h3 className="text-[13px] font-medium mb-3 flex items-center gap-1.5">
+                  <Target className="h-3.5 w-3.5 text-purple-600 opacity-70" />
+                  因子暴露分析（全区间回归）
+                </h3>
+                <p className="text-[11px] text-muted-foreground mb-3">
+                  数据区间: {factorExposure.date_range.start?.slice(0, 10)} ~ {factorExposure.date_range.end?.slice(0, 10)} |
+                  数据点: {factorExposure.data_points} |
+                  R² = {factorExposure.static.r_squared?.toFixed(4)} |
+                  Alpha(年化) = {factorExposure.static.alpha_annualized != null ? `${(factorExposure.static.alpha_annualized * 100).toFixed(2)}%` : "N/A"}
+                </p>
+
+                {/* Factor beta bar chart */}
+                {(() => {
+                  const betas = factorExposure.static!.betas;
+                  const entries = Object.entries(betas).sort(([, a], [, b]) => Math.abs(b.beta ?? 0) - Math.abs(a.beta ?? 0));
+                  return (
+                    <ReactECharts
+                      option={{
+                        tooltip: {
+                          trigger: "axis",
+                          formatter: (params: any) => {
+                            const p = Array.isArray(params) ? params[0] : params;
+                            const name = p?.name || "";
+                            const entry = betas[name];
+                            if (!entry) return name;
+                            const sig = Math.abs(entry.t_stat ?? 0) > 2.58 ? "***" : Math.abs(entry.t_stat ?? 0) > 1.96 ? "**" : Math.abs(entry.t_stat ?? 0) > 1.65 ? "*" : "";
+                            return `<b>${name}</b><br/>Beta: ${entry.beta?.toFixed(4)}<br/>t值: ${entry.t_stat?.toFixed(2)} ${sig}<br/>指数: ${factorExposure.factors[name] || ""}`;
+                          },
+                        },
+                        grid: { left: 80, right: 30, top: 15, bottom: 25 },
+                        xAxis: {
+                          type: "category",
+                          data: entries.map(([name]) => name),
+                          axisLabel: { fontSize: 10 },
+                        },
+                        yAxis: {
+                          type: "value",
+                          axisLabel: { fontSize: 10 },
+                          splitLine: { lineStyle: { color: "#f3f4f6" } },
+                        },
+                        series: [{
+                          type: "bar",
+                          data: entries.map(([name, b]) => ({
+                            value: b.beta,
+                            itemStyle: {
+                              color: Math.abs(b.t_stat ?? 0) >= 1.96 ? "#2563eb" : "#cbd5e1",
+                            },
+                          })),
+                          label: {
+                            show: true,
+                            position: "top",
+                            fontSize: 10,
+                            formatter: (p: any) => p.value?.toFixed(3),
+                          },
+                        }],
+                      }}
+                      style={{ height: 260 }}
+                      notMerge
+                    />
+                  );
+                })()}
+
+                {/* Factor detail table */}
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/40">
+                      <TableHead className="h-8 text-[11px] font-normal">因子</TableHead>
+                      <TableHead className="h-8 text-[11px] font-normal">代理指数</TableHead>
+                      <TableHead className="h-8 text-[11px] font-normal text-right">Beta</TableHead>
+                      <TableHead className="h-8 text-[11px] font-normal text-right">t值</TableHead>
+                      <TableHead className="h-8 text-[11px] font-normal text-center">显著性</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {Object.entries(factorExposure.static!.betas)
+                      .sort(([, a], [, b]) => Math.abs(b.beta ?? 0) - Math.abs(a.beta ?? 0))
+                      .map(([name, b]) => {
+                        const absT = Math.abs(b.t_stat ?? 0);
+                        const sig = absT > 2.58 ? "***" : absT > 1.96 ? "**" : absT > 1.65 ? "*" : "";
+                        const sigColor = absT > 1.96 ? "text-green-600 font-medium" : "text-muted-foreground";
+                        return (
+                          <TableRow key={name} className="text-[12px]">
+                            <TableCell className="py-2 font-medium">{name}</TableCell>
+                            <TableCell className="py-2 text-muted-foreground text-[11px]">{factorExposure.factors[name] || ""}</TableCell>
+                            <TableCell className="py-2 text-right tabular-nums">{b.beta?.toFixed(4) ?? "—"}</TableCell>
+                            <TableCell className="py-2 text-right tabular-nums">{b.t_stat?.toFixed(2) ?? "—"}</TableCell>
+                            <TableCell className={`py-2 text-center ${sigColor}`}>{sig || "—"}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {/* Rolling R² chart */}
+              {factorExposure.rolling.length > 0 && (
+                <div className="bg-card border border-border rounded p-3">
+                  <h3 className="text-[13px] font-medium mb-2">滚动R²（{factorExposure.rolling_window}日窗口）</h3>
+                  <ReactECharts
+                    option={{
+                      tooltip: { trigger: "axis", formatter: (p: any) => `${p[0]?.axisValue?.slice(0, 10)}<br/>R²: ${p[0]?.value?.toFixed(4)}` },
+                      grid: { left: 50, right: 20, top: 15, bottom: 25 },
+                      xAxis: {
+                        type: "category",
+                        data: factorExposure.rolling.map(r => r.date.slice(0, 10)),
+                        axisLabel: { fontSize: 9, rotate: 30 },
+                      },
+                      yAxis: { type: "value", min: 0, max: 1, axisLabel: { fontSize: 10 } },
+                      series: [{
+                        type: "line",
+                        data: factorExposure.rolling.map(r => r.r_squared),
+                        smooth: true,
+                        symbol: "none",
+                        lineStyle: { width: 2, color: "#7c3aed" },
+                        areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(124,58,237,0.15)" }, { offset: 1, color: "rgba(124,58,237,0.01)" }] } },
+                      }],
+                    }}
+                    style={{ height: 200 }}
+                    notMerge
+                  />
+                </div>
+              )}
+
+              {/* Rolling factor betas chart */}
+              {factorExposure.rolling.length > 0 && (
+                <div className="bg-card border border-border rounded p-3">
+                  <h3 className="text-[13px] font-medium mb-2">滚动因子暴露（{factorExposure.rolling_window}日窗口）</h3>
+                  <ReactECharts
+                    option={{
+                      tooltip: { trigger: "axis" },
+                      legend: {
+                        data: Object.keys(factorExposure.static!.betas),
+                        textStyle: { fontSize: 10 },
+                        bottom: 0,
+                      },
+                      grid: { left: 50, right: 20, top: 15, bottom: 40 },
+                      xAxis: {
+                        type: "category",
+                        data: factorExposure.rolling.map(r => r.date.slice(0, 10)),
+                        axisLabel: { fontSize: 9, rotate: 30 },
+                      },
+                      yAxis: { type: "value", axisLabel: { fontSize: 10 } },
+                      series: Object.keys(factorExposure.static!.betas).map(name => ({
+                        name,
+                        type: "line",
+                        data: factorExposure.rolling.map(r => r.betas[name]?.beta ?? null),
+                        smooth: true,
+                        symbol: "none",
+                        lineStyle: { width: 1.5 },
+                      })),
+                      color: ["#2563eb", "#7c3aed", "#db2777", "#ea580c", "#16a34a", "#0891b2"],
+                    }}
+                    style={{ height: 320 }}
+                    notMerge
+                  />
+                </div>
+              )}
+
+              {/* Nominal vs Actual exposure comparison */}
+              {strategyAttr && strategyAttr.snapshots.length > 0 && (
+                <div className="bg-card border border-border rounded p-3">
+                  <h3 className="text-[13px] font-medium mb-2">名义配置 vs 实际暴露对比</h3>
+                  <p className="text-[11px] text-muted-foreground mb-3">
+                    左侧：估值表中各策略的名义权重 | 右侧：回归得到的因子Beta（归一化）
+                  </p>
+                  {(() => {
+                    const latest = strategyAttr.snapshots[strategyAttr.snapshots.length - 1];
+                    const betas = factorExposure.static!.betas;
+                    // Map strategy_types to factor names
+                    const mapping: Record<string, string> = {
+                      "股票多头": "股票多头", "期货策略": "CTA", "股票对冲": "市场中性",
+                      "套利策略": "套利策略", "期权策略": "期权策略", "多资产策略": "债券",
+                    };
+                    const categories = Object.keys(latest.strategy_weights).filter(st => st !== "未分类");
+                    const nominalWeights = categories.map(st => latest.strategy_weights[st]?.weight ?? 0);
+                    // Normalize positive betas for comparison
+                    const betaValues = categories.map(st => {
+                      const factorName = mapping[st];
+                      return factorName && betas[factorName] ? Math.max(0, betas[factorName].beta ?? 0) : 0;
+                    });
+                    const betaSum = betaValues.reduce((a, b) => a + b, 0) || 1;
+                    const normalizedBetas = betaValues.map(b => b / betaSum);
+
+                    return (
+                      <ReactECharts
+                        option={{
+                          tooltip: { trigger: "axis", formatter: (params: any) => {
+                            const items = Array.isArray(params) ? params : [params];
+                            let tip = items[0]?.name || "";
+                            for (const p of items) {
+                              tip += `<br/>${p.seriesName}: ${(p.value * 100).toFixed(1)}%`;
+                            }
+                            return tip;
+                          }},
+                          legend: { data: ["名义权重", "实际暴露"], textStyle: { fontSize: 10 } },
+                          grid: { left: 80, right: 20, top: 30, bottom: 25 },
+                          xAxis: { type: "category", data: categories, axisLabel: { fontSize: 10 } },
+                          yAxis: { type: "value", axisLabel: { fontSize: 10, formatter: (v: number) => `${(v * 100).toFixed(0)}%` } },
+                          series: [
+                            { name: "名义权重", type: "bar", data: nominalWeights, itemStyle: { color: "#2563eb" }, barGap: "10%" },
+                            { name: "实际暴露", type: "bar", data: normalizedBetas, itemStyle: { color: "#ea580c" } },
+                          ],
+                        }}
+                        style={{ height: 260 }}
+                        notMerge
+                      />
+                    );
+                  })()}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="bg-card border border-border rounded p-8 text-center text-muted-foreground text-[12px]">
+              {factorExposure?.error || "暂无因子暴露数据。需要产品有足够的日频净值数据（至少60个交易日）。"}
+            </div>
+          )}
+        </TabsContent>
+
+        {/* Attribution tab (Brinson-based) */}
         <TabsContent value="attribution" className="mt-3 space-y-4">
           {/* Period selector */}
           <div className="flex items-center gap-3 flex-wrap">

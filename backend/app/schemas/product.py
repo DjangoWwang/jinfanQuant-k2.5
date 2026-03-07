@@ -160,3 +160,84 @@ class ProductNavResponse(BaseModel):
 class ValuationListResponse(BaseModel):
     items: list[ValuationSnapshotResponse]
     total: int
+
+
+# ------------------------------------------------------------------
+# Strategy Attribution schemas
+# ------------------------------------------------------------------
+
+class StrategyFundDetail(BaseModel):
+    fund_name: str
+    fund_id: int | None = None
+    strategy_sub: str = ""
+    market_value: float = 0.0
+    weight_pct: float = 0.0
+
+
+class StrategyWeight(BaseModel):
+    weight: float = 0.0
+    weight_pct_nav: float = 0.0
+    market_value: float = 0.0
+    fund_count: int = 0
+    funds: list[StrategyFundDetail] = Field(default_factory=list)
+
+
+class SnapshotStrategyData(BaseModel):
+    valuation_date: str
+    unit_nav: float | None = None
+    total_nav: float | None = None
+    strategy_weights: dict[str, StrategyWeight] = Field(default_factory=dict)
+
+
+class ReturnContribution(BaseModel):
+    avg_weight: float = 0.0
+    strategy_return: float | None = None
+    contribution: float | None = None
+
+
+class PeriodContribution(BaseModel):
+    period_start: str
+    period_end: str
+    total_return: float = 0.0
+    contributions: dict[str, ReturnContribution] = Field(default_factory=dict)
+
+
+class StrategyAttributionResponse(BaseModel):
+    snapshots: list[SnapshotStrategyData] = Field(default_factory=list)
+    strategy_types: list[str] = Field(default_factory=list)
+    return_contribution: list[PeriodContribution] = Field(default_factory=list)
+
+
+# ------------------------------------------------------------------
+# Factor Exposure schemas
+# ------------------------------------------------------------------
+
+class FactorBeta(BaseModel):
+    beta: float | None = None
+    t_stat: float | None = None
+    se: float | None = None
+
+
+class StaticRegression(BaseModel):
+    alpha: float | None = None
+    alpha_annualized: float | None = None
+    alpha_t_stat: float | None = None
+    r_squared: float | None = None
+    betas: dict[str, FactorBeta] = Field(default_factory=dict)
+
+
+class RollingPoint(BaseModel):
+    date: str
+    r_squared: float | None = None
+    betas: dict[str, FactorBeta] = Field(default_factory=dict)
+
+
+class FactorExposureResponse(BaseModel):
+    product_id: int
+    data_points: int = 0
+    date_range: dict[str, str] = Field(default_factory=dict)
+    factors: dict[str, str] = Field(default_factory=dict)
+    static: StaticRegression | None = None
+    rolling: list[RollingPoint] = Field(default_factory=list)
+    rolling_window: int = 60
+    error: str | None = None

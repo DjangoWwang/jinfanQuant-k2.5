@@ -18,8 +18,11 @@ from app.schemas.product import (
     ValuationSnapshotResponse,
     ValuationListResponse,
     ProductNavResponse,
+    StrategyAttributionResponse,
+    FactorExposureResponse,
 )
 from app.services.product_service import product_service
+from app.services.attribution_service import attribution_service
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -162,6 +165,43 @@ async def get_valuation_snapshot(
     result = await product_service.get_valuation_snapshot(db, snapshot_id)
     if not result or result.product_id != product_id:
         raise HTTPException(status_code=404, detail="估值快照不存在")
+    return result
+
+
+# ------------------------------------------------------------------
+# NAV series
+# ------------------------------------------------------------------
+
+# ------------------------------------------------------------------
+# Strategy Attribution & Factor Exposure
+# ------------------------------------------------------------------
+
+@router.get("/{product_id}/strategy-attribution", response_model=StrategyAttributionResponse)
+async def get_strategy_attribution(
+    product_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get FOF strategy-level weight allocation and return contribution."""
+    product = await product_service.get_product(db, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    result = await attribution_service.get_strategy_attribution(db, product_id)
+    return result
+
+
+@router.get("/{product_id}/factor-exposure", response_model=FactorExposureResponse)
+async def get_factor_exposure(
+    product_id: int,
+    window: int = Query(60, ge=20, le=250, description="Rolling window size (trading days)"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Run multi-factor regression to estimate FOF factor exposures."""
+    product = await product_service.get_product(db, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    result = await attribution_service.get_factor_exposure(db, product_id, window=window)
+    if "error" in result and result.get("error"):
+        return FactorExposureResponse(product_id=product_id, error=result["error"])
     return result
 
 
