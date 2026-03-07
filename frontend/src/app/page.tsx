@@ -335,7 +335,7 @@ export default function DashboardPage() {
           { label: "基金数据库", icon: Database, href: "/fund-database", count: fundStats?.total ?? "—", sub: "只基金" },
           { label: "基金比较", icon: GitCompare, href: "/fund-research/comparison", count: "—", sub: "对比分析" },
           { label: "基金池", icon: Briefcase, href: "/fund-research/pools", count: poolCounts ? `${poolCounts.watch + poolCounts.investment}` : "—", sub: "关注中" },
-          { label: "策略分类", icon: BarChart3, href: "/fund-database", count: fundStats?.strategy_breakdown?.length ?? "—", sub: "个策略" },
+          { label: "策略分类", icon: BarChart3, href: "/fund-database", count: fundStats?.strategy_breakdown?.filter(s => !["未分类", "FOF", "其他"].includes(s.strategy_type)).length ?? "—", sub: "个策略" },
         ].map(item => (
           <button
             key={item.label}

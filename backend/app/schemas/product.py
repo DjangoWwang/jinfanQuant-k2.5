@@ -169,6 +169,7 @@ class ValuationListResponse(BaseModel):
 class StrategyFundDetail(BaseModel):
     fund_name: str
     fund_id: int | None = None
+    strategy_type: str = ""
     strategy_sub: str = ""
     market_value: float = 0.0
     weight_pct: float = 0.0

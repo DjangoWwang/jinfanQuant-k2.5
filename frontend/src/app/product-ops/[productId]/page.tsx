@@ -135,6 +135,7 @@ interface AttributionResult {
 interface StrategyFundDetail {
   fund_name: string;
   fund_id: number | null;
+  strategy_type: string;
   strategy_sub: string;
   market_value: number;
   weight_pct: number;
@@ -233,10 +234,13 @@ export default function ProductDetailPage() {
   // Strategy attribution state
   const [strategyAttr, setStrategyAttr] = useState<StrategyAttribution | null>(null);
   const [strategyLoading, setStrategyLoading] = useState(false);
+  const [strategyGroupBy, setStrategyGroupBy] = useState<"strategy_type" | "strategy_sub">("strategy_type");
 
   // Factor exposure state
   const [factorExposure, setFactorExposure] = useState<FactorExposure | null>(null);
   const [factorLoading, setFactorLoading] = useState(false);
+  // Always-loaded strategy_type weights for factor comparison chart
+  const [strategyTypeWeights, setStrategyTypeWeights] = useState<Record<string, number>>({});
 
   // Report generation state
   const [reportDialogOpen, setReportDialogOpen] = useState(false);
@@ -265,11 +269,8 @@ export default function ProductDetailPage() {
         setLatestSnapshot(latest);
       }
 
-      // Load strategy attribution & factor exposure in parallel
-      Promise.all([
-        fetchApi<StrategyAttribution>(`/products/${productId}/strategy-attribution`).then(setStrategyAttr).catch(() => {}),
-        fetchApi<FactorExposure>(`/products/${productId}/factor-exposure?window=60`).then(setFactorExposure).catch(() => {}),
-      ]);
+      // Load factor exposure (strategy attr loaded separately with groupBy)
+      fetchApi<FactorExposure>(`/products/${productId}/factor-exposure?window=60`).then(setFactorExposure).catch(() => {});
     } catch (e) {
       console.error("Load failed:", e);
     } finally {
@@ -290,6 +291,31 @@ export default function ProductDetailPage() {
       setAttrEnd(dates[dates.length - 1]);
     }
   }, [navSeries, attrStart]);
+
+  // Load strategy attribution (reloads when groupBy changes)
+  useEffect(() => {
+    setStrategyLoading(true);
+    fetchApi<StrategyAttribution>(`/products/${productId}/strategy-attribution?group_by=${strategyGroupBy}`)
+      .then(setStrategyAttr)
+      .catch(() => setStrategyAttr(null))
+      .finally(() => setStrategyLoading(false));
+  }, [productId, strategyGroupBy]);
+
+  // Always load strategy_type weights (for factor comparison chart, independent of toggle)
+  useEffect(() => {
+    fetchApi<StrategyAttribution>(`/products/${productId}/strategy-attribution?group_by=strategy_type`)
+      .then(data => {
+        if (data.snapshots.length > 0) {
+          const latest = data.snapshots[data.snapshots.length - 1];
+          const weights: Record<string, number> = {};
+          for (const [st, w] of Object.entries(latest.strategy_weights)) {
+            weights[st] = w.weight;
+          }
+          setStrategyTypeWeights(weights);
+        }
+      })
+      .catch(() => {});
+  }, [productId]);
 
   // Auto-fill report dates from product data
   useEffect(() => {
@@ -644,6 +670,20 @@ export default function ProductDetailPage() {
 
         {/* Strategy Attribution tab */}
         <TabsContent value="strategy" className="mt-3 space-y-4">
+          {/* Group by toggle */}
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-muted-foreground">分组维度:</span>
+            <button
+              className={`px-2.5 py-1 rounded text-[11px] transition-colors ${strategyGroupBy === "strategy_type" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"}`}
+              onClick={() => setStrategyGroupBy("strategy_type")}
+            >一级标签</button>
+            <button
+              className={`px-2.5 py-1 rounded text-[11px] transition-colors ${strategyGroupBy === "strategy_sub" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"}`}
+              onClick={() => setStrategyGroupBy("strategy_sub")}
+            >二级标签</button>
+            {strategyLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+          </div>
+
           {strategyAttr && strategyAttr.snapshots.length > 0 ? (
             <>
               {/* Strategy weight stacked bar chart */}
@@ -998,29 +1038,32 @@ export default function ProductDetailPage() {
               )}
 
               {/* Nominal vs Actual exposure comparison */}
-              {strategyAttr && strategyAttr.snapshots.length > 0 && (
+              {Object.keys(strategyTypeWeights).length > 0 && (
                 <div className="bg-card border border-border rounded p-3">
                   <h3 className="text-[13px] font-medium mb-2">名义配置 vs 实际暴露对比</h3>
                   <p className="text-[11px] text-muted-foreground mb-3">
-                    左侧：估值表中各策略的名义权重 | 右侧：回归得到的因子Beta（归一化）
+                    蓝色：估值表中一级标签名义权重 | 橙色：回归因子Beta（归一化）
                   </p>
                   {(() => {
-                    const latest = strategyAttr.snapshots[strategyAttr.snapshots.length - 1];
                     const betas = factorExposure.static!.betas;
-                    // Map strategy_types to factor names
-                    const mapping: Record<string, string> = {
-                      "股票多头": "股票多头", "期货策略": "CTA", "股票对冲": "市场中性",
-                      "套利策略": "套利策略", "期权策略": "期权策略", "多资产策略": "债券",
+                    // Factor name → strategy_type mapping
+                    const factorToStrategy: Record<string, string> = {
+                      "股票多头": "股票多头", "CTA": "期货策略", "市场中性": "股票对冲",
+                      "套利策略": "套利策略", "期权策略": "期权策略", "债券": "债券策略",
                     };
-                    const categories = Object.keys(latest.strategy_weights).filter(st => st !== "未分类");
-                    const nominalWeights = categories.map(st => latest.strategy_weights[st]?.weight ?? 0);
-                    // Normalize positive betas for comparison
-                    const betaValues = categories.map(st => {
-                      const factorName = mapping[st];
-                      return factorName && betas[factorName] ? Math.max(0, betas[factorName].beta ?? 0) : 0;
-                    });
-                    const betaSum = betaValues.reduce((a, b) => a + b, 0) || 1;
-                    const normalizedBetas = betaValues.map(b => b / betaSum);
+                    // Use factor names as x-axis, sorted by nominal weight
+                    const factorNames = Object.keys(betas);
+                    const entries = factorNames.map(fn => {
+                      const stType = factorToStrategy[fn] || fn;
+                      const nominal = strategyTypeWeights[stType] ?? 0;
+                      const beta = Math.max(0, betas[fn]?.beta ?? 0);
+                      return { factor: fn, strategy: stType, nominal, beta };
+                    }).sort((a, b) => b.nominal - a.nominal);
+
+                    const betaSum = entries.reduce((s, e) => s + e.beta, 0) || 1;
+                    const categories = entries.map(e => e.factor);
+                    const nominalData = entries.map(e => e.nominal);
+                    const betaData = entries.map(e => e.beta / betaSum);
 
                     return (
                       <ReactECharts
@@ -1034,12 +1077,12 @@ export default function ProductDetailPage() {
                             return tip;
                           }},
                           legend: { data: ["名义权重", "实际暴露"], textStyle: { fontSize: 10 } },
-                          grid: { left: 80, right: 20, top: 30, bottom: 25 },
+                          grid: { left: 60, right: 20, top: 30, bottom: 25 },
                           xAxis: { type: "category", data: categories, axisLabel: { fontSize: 10 } },
                           yAxis: { type: "value", axisLabel: { fontSize: 10, formatter: (v: number) => `${(v * 100).toFixed(0)}%` } },
                           series: [
-                            { name: "名义权重", type: "bar", data: nominalWeights, itemStyle: { color: "#2563eb" }, barGap: "10%" },
-                            { name: "实际暴露", type: "bar", data: normalizedBetas, itemStyle: { color: "#ea580c" } },
+                            { name: "名义权重", type: "bar", data: nominalData, itemStyle: { color: "#2563eb" }, barGap: "10%" },
+                            { name: "实际暴露", type: "bar", data: betaData, itemStyle: { color: "#ea580c" } },
                           ],
                         }}
                         style={{ height: 260 }}

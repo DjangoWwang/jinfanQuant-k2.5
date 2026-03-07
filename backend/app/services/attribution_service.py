@@ -44,11 +44,14 @@ class AttributionService:
         self,
         db: AsyncSession,
         product_id: int,
+        group_by: str = "strategy_type",
     ) -> dict[str, Any]:
         """Compute strategy-level weight and return attribution from valuation snapshots.
 
-        For each snapshot, groups sub-fund holdings by strategy_type,
+        For each snapshot, groups sub-fund holdings by strategy_type (or strategy_sub),
         computes weights, and calculates return contribution between periods.
+
+        group_by: "strategy_type" (大类) or "strategy_sub" (子类)
         """
         # Get all snapshots ordered by date
         snap_result = await db.execute(
@@ -86,27 +89,33 @@ class AttributionService:
             )
             items = items_result.all()
 
-            # Group by strategy_type
+            # Group by strategy label
             strategy_groups: dict[str, list[dict]] = {}
             total_subfund_mv = 0.0
 
             for item in items:
-                strategy = item.strategy_type or "未分类"
+                strategy_type = item.strategy_type or "未分类"
                 strategy_sub = item.strategy_sub or ""
+                # Determine group key based on group_by parameter
+                if group_by == "strategy_sub" and strategy_sub:
+                    group_key = strategy_sub
+                else:
+                    group_key = strategy_type
                 mv = float(item.market_value) if item.market_value else 0.0
                 pct = float(item.value_pct_nav) if item.value_pct_nav else 0.0
                 total_subfund_mv += mv
 
-                if strategy not in strategy_groups:
-                    strategy_groups[strategy] = []
-                strategy_groups[strategy].append({
+                if group_key not in strategy_groups:
+                    strategy_groups[group_key] = []
+                strategy_groups[group_key].append({
                     "fund_name": item.item_name or item.fund_name or "",
                     "fund_id": item.linked_fund_id,
                     "strategy_sub": strategy_sub,
+                    "strategy_type": strategy_type,
                     "market_value": mv,
                     "weight_pct": pct,
                 })
-                strategy_types_set.add(strategy)
+                strategy_types_set.add(group_key)
 
             # Compute strategy-level weights
             strategy_weights = {}

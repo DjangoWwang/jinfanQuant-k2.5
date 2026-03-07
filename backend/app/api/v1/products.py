@@ -179,13 +179,14 @@ async def get_valuation_snapshot(
 @router.get("/{product_id}/strategy-attribution", response_model=StrategyAttributionResponse)
 async def get_strategy_attribution(
     product_id: int,
+    group_by: str = Query("strategy_type", description="分组维度: strategy_type(大类) or strategy_sub(子类)"),
     db: AsyncSession = Depends(get_db),
 ):
     """Get FOF strategy-level weight allocation and return contribution."""
     product = await product_service.get_product(db, product_id)
     if not product:
         raise HTTPException(status_code=404, detail="产品不存在")
-    result = await attribution_service.get_strategy_attribution(db, product_id)
+    result = await attribution_service.get_strategy_attribution(db, product_id, group_by=group_by)
     return result
 
 
