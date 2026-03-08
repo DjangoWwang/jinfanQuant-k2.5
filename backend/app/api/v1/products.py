@@ -67,6 +67,7 @@ async def list_products(
 @router.post("/", response_model=ProductResponse, status_code=201)
 async def create_product(
     payload: ProductCreate,
+    _current_user: User = Depends(require_role("admin", "analyst")),
     db: AsyncSession = Depends(get_db),
 ):
     product = await product_service.create_product(db, payload)
@@ -90,6 +91,7 @@ async def get_product(
 async def update_product(
     product_id: int,
     payload: ProductUpdate,
+    _current_user: User = Depends(require_role("admin", "analyst")),
     db: AsyncSession = Depends(get_db),
 ):
     product = await product_service.update_product(db, product_id, payload)
@@ -102,6 +104,7 @@ async def update_product(
 @router.delete("/{product_id}", status_code=204)
 async def delete_product(
     product_id: int,
+    _current_user: User = Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ):
     ok = await product_service.delete_product(db, product_id)
@@ -118,6 +121,7 @@ async def delete_product(
 async def upload_valuation(
     product_id: int,
     file: UploadFile = File(...),
+    _current_user: User = Depends(require_role("admin", "analyst")),
     db: AsyncSession = Depends(get_db),
 ):
     """Upload and parse a custodian valuation table Excel file."""

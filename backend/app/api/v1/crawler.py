@@ -1,14 +1,18 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+
+from app.api.deps import require_role
+from app.models.user import User
 
 router = APIRouter(prefix="/crawler", tags=["crawler"])
 
 
 @router.post("/trigger")
-def trigger_crawl():
+async def trigger_crawl(
+    _current_user: User = Depends(require_role("admin")),
+):
     return {
         "job_id": "CRW-20240701-001",
         "status": "started",
-        "message": "TODO",
     }
 
 
