@@ -1,0 +1,36 @@
+# 开发环境覆盖配置
+# 用法: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  db:
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    networks: [backend, default]
+
+  redis:
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    networks: [backend, default]
+
+  backend:
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend:/app
+      - report_data:/app/data/reports
+
+  celery-worker:
+    volumes:
+      - ./backend:/app
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: base
+    command: npm run dev
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:${BACKEND_PORT:-8000}/api/v1
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    networks: [frontend, default]
