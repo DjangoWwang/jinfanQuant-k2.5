@@ -14,6 +14,7 @@ import {
   ShieldAlert,
   FileBarChart,
   RefreshCw,
+  Monitor,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
@@ -42,6 +43,7 @@ const navItems: NavItem[] = [
   { label: "报告中心", href: "/reports", icon: FileBarChart },
   { label: "风险预警", href: "/risk-alerts", icon: ShieldAlert },
   { label: "数据管理", href: "/data-management", icon: RefreshCw },
+  { label: "系统监控", href: "/system-monitor", icon: Monitor },
   { label: "系统设置", href: "/settings", icon: Settings },
 ];
 
