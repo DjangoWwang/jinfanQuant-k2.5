@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,6 +10,8 @@ from pydantic import BaseModel
 
 from app.api.deps import require_role
 from app.models.user import User
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/etl", tags=["etl"])
 
@@ -55,6 +58,7 @@ async def trigger_refresh_nav(
     from app.tasks.analysis import refresh_nav_incremental
 
     fund_ids = body.fund_ids if body else None
+    logger.info("管理员 %s (id=%d) 触发增量净值刷新, fund_ids=%s", current_user.username, current_user.id, fund_ids or "全部")
     task = refresh_nav_incremental.delay(fund_ids=fund_ids)
     return TaskResponse(
         task_id=task.id,
@@ -75,6 +79,7 @@ async def trigger_refresh_nav_full(
 ) -> TaskResponse:
     from app.tasks.analysis import refresh_nav_full
 
+    logger.info("管理员 %s (id=%d) 触发全量净值重建, fund_ids=%s", current_user.username, current_user.id, body.fund_ids)
     if not body.fund_ids:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -100,12 +105,85 @@ async def trigger_daily_refresh(
 ) -> TaskResponse:
     from app.tasks.analysis import daily_data_refresh
 
+    logger.info("管理员 %s (id=%d) 手动触发每日数据刷新", current_user.username, current_user.id)
     task = daily_data_refresh.delay()
     return TaskResponse(
         task_id=task.id,
         status="queued",
         message="每日数据刷新已提交",
     )
+
+
+@router.post(
+    "/risk-check",
+    response_model=TaskResponse,
+    summary="手动触发风险检查",
+    description="手动触发所有活跃风险规则检查（仅限管理员）。",
+)
+async def trigger_risk_check(
+    current_user: User = Depends(require_role("admin")),
+) -> TaskResponse:
+    from app.tasks.analysis import scheduled_risk_check
+
+    logger.info("管理员 %s (id=%d) 手动触发风险检查", current_user.username, current_user.id)
+    task = scheduled_risk_check.delay()
+    return TaskResponse(
+        task_id=task.id,
+        status="queued",
+        message="风险规则检查已提交",
+    )
+
+
+@router.post(
+    "/nav-calc",
+    response_model=TaskResponse,
+    summary="手动触发产品净值计算",
+    description="手动触发所有活跃产品的净值计算（仅限管理员）。",
+)
+async def trigger_nav_calc(
+    current_user: User = Depends(require_role("admin")),
+) -> TaskResponse:
+    from app.tasks.analysis import scheduled_nav_calc
+
+    logger.info("管理员 %s (id=%d) 手动触发产品净值计算", current_user.username, current_user.id)
+    task = scheduled_nav_calc.delay()
+    return TaskResponse(
+        task_id=task.id,
+        status="queued",
+        message="产品净值计算已提交",
+    )
+
+
+@router.get(
+    "/schedule",
+    summary="查看定时调度配置",
+    description="查看Celery Beat定时任务调度配置（仅限管理员）。",
+)
+async def get_schedule(
+    _current_user: User = Depends(require_role("admin")),
+):
+    from app.config import settings
+
+    return {
+        "beat_enabled": settings.BEAT_ENABLED,
+        "schedules": {
+            "daily_data_refresh": {
+                "time": settings.BEAT_DAILY_REFRESH_TIME,
+                "days": "Mon-Fri",
+                "task": "app.tasks.analysis.daily_data_refresh",
+            },
+            "risk_check": {
+                "time": settings.BEAT_RISK_CHECK_TIME,
+                "days": "Mon-Fri",
+                "task": "app.tasks.analysis.scheduled_risk_check",
+            },
+            "nav_calc": {
+                "time": settings.BEAT_NAV_CALC_TIME,
+                "days": "Mon-Fri",
+                "task": "app.tasks.analysis.scheduled_nav_calc",
+            },
+        },
+    }
 
 
 @router.get(

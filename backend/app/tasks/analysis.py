@@ -7,6 +7,8 @@ import logging
 from datetime import date
 from typing import Any
 
+from celery.exceptions import SoftTimeLimitExceeded
+
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -383,3 +385,180 @@ def daily_data_refresh(self) -> dict:
     except Exception as exc:
         logger.exception("每日数据刷新任务异常")
         raise self.retry(exc=exc, countdown=120)
+
+
+# ======================================================================
+# Scheduled tasks (Celery Beat) — with Redis lock + per-item isolation
+# ======================================================================
+
+_LOCK_TTL_RISK = 600       # 10 min max for risk check
+_LOCK_TTL_NAV = 7200       # 2 hour max for NAV calc
+_PROGRESS_INTERVAL = 10    # update progress every N items
+
+# Lua script: atomic compare-and-delete (only release lock if we own it)
+_UNLOCK_LUA = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+"""
+
+
+async def _acquire_redis_lock(lock_name: str, ttl: int) -> str | None:
+    """Try to acquire a Redis-based distributed lock.
+
+    Returns a unique token if acquired, None otherwise.
+    If Redis is unavailable, returns None (refuse execution).
+    """
+    import uuid
+
+    from app.services.cache_service import get_redis
+
+    r = await get_redis()
+    if r is None:
+        logger.warning("Redis unavailable, refusing lock for %s", lock_name)
+        return None
+    token = str(uuid.uuid4())
+    acquired = await r.set(lock_name, token, nx=True, ex=ttl)
+    return token if acquired else None
+
+
+async def _release_redis_lock(lock_name: str, token: str) -> None:
+    """Release a Redis lock only if we still own it (atomic compare-and-delete)."""
+    from app.services.cache_service import get_redis
+
+    r = await get_redis()
+    if r is not None:
+        await r.eval(_UNLOCK_LUA, 1, lock_name, token)
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.analysis.scheduled_risk_check",
+    max_retries=1,
+    soft_time_limit=300,
+    time_limit=600,
+)
+def scheduled_risk_check(self) -> dict:
+    """定时风险规则检查: 评估所有活跃规则并生成告警事件。
+
+    Uses Redis lock (with owner token) to prevent concurrent execution.
+    """
+    async def _run() -> dict:
+        lock_name = "lock:scheduled_risk_check"
+        token = await _acquire_redis_lock(lock_name, _LOCK_TTL_RISK)
+        if token is None:
+            logger.info("风险检查任务已在运行中或Redis不可用，跳过本次执行")
+            return {"skipped": True, "reason": "lock_not_acquired"}
+
+        try:
+            from app.database import async_session
+            from app.services.risk_service import risk_service
+
+            logger.info("定时风险检查开始")
+            async with async_session() as db:
+                results = await risk_service.check_all_rules(db)
+                await db.commit()
+
+            triggered = len(results) if results else 0
+            logger.info("定时风险检查完成: 触发 %d 条新告警", triggered)
+            return {"triggered": triggered}
+        finally:
+            await _release_redis_lock(lock_name, token)
+
+    try:
+        return _run_async(_run())
+    except SoftTimeLimitExceeded:
+        logger.error("定时风险检查超时 (soft_time_limit=%ds)", 300)
+        return {"error": "timeout", "soft_time_limit": 300}
+    except Exception as exc:
+        logger.exception("定时风险检查任务异常")
+        raise self.retry(exc=exc, countdown=60)
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.analysis.scheduled_nav_calc",
+    max_retries=1,
+    soft_time_limit=3600,
+    time_limit=7200,
+)
+def scheduled_nav_calc(self) -> dict:
+    """定时产品净值计算: 为所有活跃产品自动计算最新净值。
+
+    - Redis lock (with owner token) prevents concurrent execution
+    - Each product uses an independent database session
+    - Progress updates throttled to every N products
+    """
+    async def _run() -> dict:
+        lock_name = "lock:scheduled_nav_calc"
+        token = await _acquire_redis_lock(lock_name, _LOCK_TTL_NAV)
+        if token is None:
+            logger.info("产品净值计算任务已在运行中或Redis不可用，跳过本次执行")
+            return {"skipped": True, "reason": "lock_not_acquired"}
+
+        try:
+            from sqlalchemy import select
+            from app.database import async_session
+            from app.models.product import Product
+            from app.services import nav_calc_service
+
+            # Load product list with a short-lived session (only id + name)
+            async with async_session() as db:
+                result = await db.execute(
+                    select(Product.id, Product.product_name)
+                    .where(Product.is_active.is_(True))
+                    .order_by(Product.id)
+                )
+                products = result.all()
+
+            total = len(products)
+            calculated, failed = 0, 0
+            failed_ids: list[int] = []
+
+            logger.info("定时产品净值计算开始: 共 %d 个活跃产品", total)
+
+            for i, (pid, pname) in enumerate(products):
+                # Per-product isolated session
+                try:
+                    async with async_session() as db:
+                        calc_result = await nav_calc_service.calculate_product_nav(db, pid)
+                        calculated += 1
+                        logger.info(
+                            "产品净值计算完成: %s (id=%d), 计算%d天",
+                            pname, pid, calc_result.calculated_days,
+                        )
+                except Exception:
+                    failed += 1
+                    failed_ids.append(pid)
+                    logger.warning("产品净值计算失败: product_id=%d (%s)", pid, pname, exc_info=True)
+
+                # Throttled progress update
+                if (i + 1) % _PROGRESS_INTERVAL == 0 or (i + 1) == total:
+                    self.update_state(
+                        state="PROGRESS",
+                        meta={"calculated": calculated, "failed": failed, "total": total},
+                    )
+
+            logger.info(
+                "定时产品净值计算完成: 成功=%d, 失败=%d, 总数=%d",
+                calculated, failed, total,
+            )
+            return {
+                "calculated": calculated,
+                "failed": failed,
+                "total": total,
+                "failed_product_ids": failed_ids[:50],
+            }
+        finally:
+            await _release_redis_lock(lock_name, token)
+
+    try:
+        return _run_async(_run())
+    except SoftTimeLimitExceeded:
+        logger.error("定时产品净值计算超时 (soft_time_limit=%ds)", 3600)
+        return {"error": "timeout", "soft_time_limit": 3600}
+    except Exception as exc:
+        logger.exception("定时产品净值计算任务异常")
+        raise self.retry(exc=exc, countdown=60)

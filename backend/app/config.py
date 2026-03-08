@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     # Report output directory for async-generated reports
     REPORT_OUTPUT_DIR: str = "data/reports"
 
+    # Celery Beat schedule (cron strings: "HH:MM" in Asia/Shanghai)
+    BEAT_DAILY_REFRESH_TIME: str = "06:00"
+    BEAT_RISK_CHECK_TIME: str = "09:30"
+    BEAT_NAV_CALC_TIME: str = "20:00"
+    BEAT_ENABLED: bool = True
+
     class Config:
         env_file = ".env"
 
