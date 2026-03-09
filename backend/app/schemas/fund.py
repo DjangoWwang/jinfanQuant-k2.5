@@ -115,6 +115,10 @@ class MetricsResponse(BaseModel):
     sharpe_ratio: float | None = None
     sortino_ratio: float | None = None
     calmar_ratio: float | None = None
+    monthly_win_rate: float | None = None
+    quarterly_win_rate: float | None = None
+    new_high_weeks: int | None = None
+    return_drawdown_ratio: float | None = None
 
 
 # ------------------------------------------------------------------

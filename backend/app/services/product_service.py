@@ -497,6 +497,7 @@ class ProductService:
                         NavSeriesPoint(
                             date=row.nav_date,
                             unit_nav=float(row.unit_nav) if row.unit_nav else None,
+                            cumulative_nav=float(row.cumulative_nav) if row.cumulative_nav else None,
                             total_nav=None,
                         )
                         for row in rows

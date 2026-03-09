@@ -295,6 +295,40 @@ def interval_dates(
 
 
 # ---------------------------------------------------------------------------
+# Win rate & new-high weeks
+# ---------------------------------------------------------------------------
+
+def calc_win_rate(nav_series: pd.Series, freq: str = "M") -> float:
+    """Win rate: percentage of positive-return periods.
+
+    *freq*: ``"M"`` for monthly, ``"Q"`` for quarterly.
+    """
+    s = nav_series.sort_index().dropna()
+    if len(s) < 2:
+        return 0.0
+    resampled = s.resample("ME" if freq == "M" else "QE").last().dropna()
+    if len(resampled) < 2:
+        return 0.0
+    rets = resampled.pct_change().dropna()
+    if len(rets) == 0:
+        return 0.0
+    return float((rets > 0).sum() / len(rets))
+
+
+def calc_new_high_weeks(nav_series: pd.Series) -> int:
+    """Count weeks where NAV reached a new all-time high."""
+    s = nav_series.sort_index().dropna()
+    if len(s) < 2:
+        return 0
+    weekly = s.resample("W").last().dropna()
+    if len(weekly) < 1:
+        return 0
+    cummax = weekly.cummax()
+    # A week is "new high" if its value equals the running max
+    return int((weekly >= cummax).sum())
+
+
+# ---------------------------------------------------------------------------
 # Convenience: all-in-one
 # ---------------------------------------------------------------------------
 
@@ -317,6 +351,11 @@ def calc_all_metrics(
     sortino = calc_sortino_ratio(s, risk_free_rate)
     calmar = calc_calmar_ratio(s)
 
+    monthly_win = calc_win_rate(s, "M")
+    quarterly_win = calc_win_rate(s, "Q")
+    new_highs = calc_new_high_weeks(s)
+    ret_dd_ratio = float(abs(ann_ret / mdd)) if mdd != 0 else 0.0
+
     return {
         "total_return": total_ret,
         "annualized_return": ann_ret,
@@ -327,6 +366,10 @@ def calc_all_metrics(
         "sharpe_ratio": sharpe,
         "sortino_ratio": sortino,
         "calmar_ratio": calmar,
+        "monthly_win_rate": monthly_win,
+        "quarterly_win_rate": quarterly_win,
+        "new_high_weeks": new_highs,
+        "return_drawdown_ratio": ret_dd_ratio,
     }
 
 

@@ -90,9 +90,18 @@ interface ValuationSnapshot {
 }
 
 interface ProductMetrics {
+  total_return?: number | null;
   annualized_return?: number | null;
   max_drawdown?: number | null;
   sharpe_ratio?: number | null;
+  sortino_ratio?: number | null;
+  calmar_ratio?: number | null;
+  monthly_win_rate?: number | null;
+  quarterly_win_rate?: number | null;
+  new_high_weeks?: number | null;
+  return_drawdown_ratio?: number | null;
+  annualized_volatility?: number | null;
+  // interval returns (from separate preset calls)
   week_return?: number | null;
   month_return?: number | null;
   ytd_return?: number | null;
@@ -197,41 +206,29 @@ export default function DashboardPage() {
     ]).then(async ([navResult, valResult]) => {
       if (navResult.status === "fulfilled") {
         setNavSeries(navResult.value.nav_series);
-        // Compute simple metrics from nav series
-        const series = navResult.value.nav_series.filter(n => n.unit_nav != null);
-        if (series.length >= 2) {
-          const latest = series[series.length - 1].unit_nav!;
-          const first = series[0].unit_nav!;
+        // Fetch metrics from backend API (uses cumulative_nav)
+        try {
+          const [inceptionMetrics, weekMetrics, monthMetrics, ytdMetrics] = await Promise.allSettled([
+            fetchApi<ProductMetrics>(`/products/${selectedProductId}/nav/metrics?preset=inception`),
+            fetchApi<{ total_return: number }>(`/products/${selectedProductId}/nav/metrics?preset=wtd`),
+            fetchApi<{ total_return: number }>(`/products/${selectedProductId}/nav/metrics?preset=1m`),
+            fetchApi<{ total_return: number }>(`/products/${selectedProductId}/nav/metrics?preset=ytd`),
+          ]);
           const m: ProductMetrics = {};
-          // YTD
-          const yearStart = series.find(n => n.date >= `${new Date().getFullYear()}-01-01`);
-          if (yearStart?.unit_nav) m.ytd_return = (latest - yearStart.unit_nav) / yearStart.unit_nav;
-          // 1M
-          const oneMonthAgo = new Date(); oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
-          const monthStr = oneMonthAgo.toISOString().slice(0, 10);
-          const monthPoint = series.find(n => n.date >= monthStr);
-          if (monthPoint?.unit_nav) m.month_return = (latest - monthPoint.unit_nav) / monthPoint.unit_nav;
-          // 1W
-          const oneWeekAgo = new Date(); oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-          const weekStr = oneWeekAgo.toISOString().slice(0, 10);
-          const weekPoint = series.find(n => n.date >= weekStr);
-          if (weekPoint?.unit_nav) m.week_return = (latest - weekPoint.unit_nav) / weekPoint.unit_nav;
-          // Max drawdown
-          let peak = series[0].unit_nav!;
-          let maxDD = 0;
-          for (const p of series) {
-            if (p.unit_nav! > peak) peak = p.unit_nav!;
-            const dd = (p.unit_nav! - peak) / peak;
-            if (dd < maxDD) maxDD = dd;
+          if (inceptionMetrics.status === "fulfilled") {
+            const im = inceptionMetrics.value;
+            m.annualized_return = im.annualized_return;
+            m.max_drawdown = im.max_drawdown;
+            m.sharpe_ratio = im.sharpe_ratio;
+            m.monthly_win_rate = im.monthly_win_rate;
+            m.quarterly_win_rate = im.quarterly_win_rate;
+            m.new_high_weeks = im.new_high_weeks;
           }
-          m.max_drawdown = maxDD;
-          // Annualized
-          const days = (new Date(series[series.length - 1].date).getTime() - new Date(series[0].date).getTime()) / 86400000;
-          if (days > 0 && first > 0) {
-            m.annualized_return = Math.pow(latest / first, 365 / days) - 1;
-          }
+          if (weekMetrics.status === "fulfilled") m.week_return = weekMetrics.value.total_return;
+          if (monthMetrics.status === "fulfilled") m.month_return = monthMetrics.value.total_return;
+          if (ytdMetrics.status === "fulfilled") m.ytd_return = ytdMetrics.value.total_return;
           setMetrics(m);
-        } else {
+        } catch {
           setMetrics({});
         }
       }

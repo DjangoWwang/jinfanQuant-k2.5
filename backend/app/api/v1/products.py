@@ -28,6 +28,7 @@ from app.schemas.product import (
     NavCalcResultResponse,
     NavStatsResponse,
     NavSeriesPoint,
+    ProductMetricsResponse,
     StrategyAttributionResponse,
     FactorExposureResponse,
 )
@@ -338,6 +339,78 @@ async def get_factor_exposure(
 
 
 # ------------------------------------------------------------------
+# Product metrics
+# ------------------------------------------------------------------
+
+@router.get("/{product_id}/nav/metrics", response_model=ProductMetricsResponse)
+async def get_product_metrics(
+    product_id: int,
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    preset: Optional[str] = Query(None, description="ytd, 1y, 3y, inception..."),
+    risk_free_rate: float = Query(0.02),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get product performance metrics calculated from cumulative NAV."""
+    from app.engine.metrics import calc_all_metrics, interval_dates
+
+    product = await product_service.get_product(db, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+
+    if preset and not start_date:
+        try:
+            start_date, end_date = interval_dates(preset)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"无效的区间预设: {preset}")
+
+    # Build NAV series from product's nav data (prefers cumulative_nav)
+    nav_points = await product_service.get_nav_series(db, product_id, start_date, end_date)
+
+    # Also try calculated NAVs
+    calc_records = await nav_calc_service.get_calculated_nav_series(
+        db, product_id, start_date, end_date,
+    )
+
+    import pandas as pd
+
+    if calc_records:
+        pairs = [
+            (r.nav_date, float(r.cumulative_nav or r.unit_nav or 0))
+            for r in calc_records
+            if r.cumulative_nav is not None or r.unit_nav is not None
+        ]
+    elif nav_points:
+        pairs = [
+            (p.date, float(p.cumulative_nav or p.unit_nav or 0))
+            for p in nav_points
+            if p.cumulative_nav is not None or p.unit_nav is not None
+        ]
+    else:
+        raise HTTPException(status_code=404, detail="该产品无净值数据")
+
+    if len(pairs) < 2:
+        raise HTTPException(status_code=404, detail="该产品净值数据不足")
+
+    dates, navs = zip(*pairs)
+    series = pd.Series(navs, index=pd.DatetimeIndex(dates))
+
+    m = calc_all_metrics(series, risk_free_rate)
+    first_date = series.index[0]
+    last_date = series.index[-1]
+
+    return ProductMetricsResponse(
+        product_id=product_id,
+        product_name=product.product_name,
+        start_date=first_date.date() if hasattr(first_date, 'date') else first_date,
+        end_date=last_date.date() if hasattr(last_date, 'date') else last_date,
+        **{k: v for k, v in m.items() if k not in ("max_dd_peak", "max_dd_trough")},
+        max_dd_peak=m.get("max_dd_peak"),
+        max_dd_trough=m.get("max_dd_trough"),
+    )
+
+
+# ------------------------------------------------------------------
 # NAV series
 # ------------------------------------------------------------------
 
@@ -365,6 +438,7 @@ async def get_product_nav(
             NavSeriesPoint(
                 date=r.nav_date,
                 unit_nav=float(r.unit_nav) if r.unit_nav is not None else None,
+                cumulative_nav=float(r.cumulative_nav) if r.cumulative_nav is not None else None,
                 total_nav=float(r.total_nav) if r.total_nav is not None else None,
             )
             for r in calc_records

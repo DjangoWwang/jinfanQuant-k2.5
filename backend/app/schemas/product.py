@@ -148,6 +148,7 @@ class ValuationUploadResponse(BaseModel):
 class NavSeriesPoint(BaseModel):
     date: date
     unit_nav: float | None = None
+    cumulative_nav: float | None = None
     total_nav: float | None = None
 
 
@@ -172,6 +173,26 @@ class ProductNavCalcResponse(BaseModel):
     product_id: int
     product_name: str
     nav_series: list[NavCalcPoint]
+
+
+class ProductMetricsResponse(BaseModel):
+    product_id: int
+    product_name: str
+    start_date: date | None = None
+    end_date: date | None = None
+    total_return: float | None = None
+    annualized_return: float | None = None
+    max_drawdown: float | None = None
+    max_dd_peak: str | None = None
+    max_dd_trough: str | None = None
+    annualized_volatility: float | None = None
+    sharpe_ratio: float | None = None
+    sortino_ratio: float | None = None
+    calmar_ratio: float | None = None
+    monthly_win_rate: float | None = None
+    quarterly_win_rate: float | None = None
+    new_high_weeks: int | None = None
+    return_drawdown_ratio: float | None = None
 
 
 class NavCalcResultResponse(BaseModel):
