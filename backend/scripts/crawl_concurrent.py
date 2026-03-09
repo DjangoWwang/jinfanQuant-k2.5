@@ -35,7 +35,11 @@ import os
 import sys
 import time
 from datetime import date, timedelta
+from functools import partial
 from pathlib import Path
+
+# 强制无缓冲输出
+print = partial(print, flush=True)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -61,34 +65,47 @@ logger = logging.getLogger("crawl_concurrent")
 logger.setLevel(logging.INFO)
 
 # 账号配置
-# 账号2 (机构账号, 10个设备配额) 为主力抓取账号
-# 每个worker用不同的DEVICE_ID，同一账号可并发10个
+# 火富牛机构账号最多20个设备，但为避免占满，默认用主账号+可控数量
+# 备用账号 (132开头) 不用于爬虫，避免占用其设备位
 import hashlib
 
-PRIMARY_USERNAME = os.getenv("FOF99_USERNAME", "")
-PRIMARY_PASSWORD = os.getenv("FOF99_PASSWORD", "")
-PRIMARY_DEVICE_ID = os.getenv("FOF99_DEVICE_ID", "")
+_ACCOUNTS = [
+    {
+        "username": os.getenv("FOF99_USERNAME", ""),
+        "password": os.getenv("FOF99_PASSWORD", ""),
+        "device_id": os.getenv("FOF99_DEVICE_ID", ""),
+    },
+]
+# 火富牛实际限20台设备，但保守用10个避免占满
+MAX_DEVICES_PER_ACCOUNT = 10
 
 
-def generate_device_id(worker_index: int) -> str:
-    """为每个worker生成确定性的DEVICE_ID。
-
-    使用worker_index生成不同但固定的ID,
-    这样重启后不会浪费设备配额。
-    """
-    if worker_index == 0 and PRIMARY_DEVICE_ID:
-        return PRIMARY_DEVICE_ID
-    seed = f"jinfan_worker_{worker_index}_2026"
+def generate_device_id(account_index: int, slot: int) -> str:
+    """为每个账号的每个设备槽位生成确定性的DEVICE_ID。"""
+    primary_did = _ACCOUNTS[account_index].get("device_id", "")
+    if slot == 0 and primary_did:
+        return primary_did
+    seed = f"jinfan_acct{account_index}_slot{slot}_2026"
     return hashlib.md5(seed.encode()).hexdigest()
 
 
 def get_worker_account(worker_index: int) -> dict:
-    """获取worker的账号配置。所有worker共用同一账号，不同DEVICE_ID。"""
+    """获取worker的账号配置。按轮询分配到多个账号，每账号最多3个设备。"""
+    acct_idx = worker_index // MAX_DEVICES_PER_ACCOUNT
+    slot = worker_index % MAX_DEVICES_PER_ACCOUNT
+    # 超出账号数则循环使用
+    acct_idx = acct_idx % len(_ACCOUNTS)
+    acct = _ACCOUNTS[acct_idx]
     return {
-        "username": PRIMARY_USERNAME,
-        "password": PRIMARY_PASSWORD,
-        "device_id": generate_device_id(worker_index),
+        "username": acct["username"],
+        "password": acct["password"],
+        "device_id": generate_device_id(acct_idx, slot),
     }
+
+
+def max_workers_available() -> int:
+    """可用的最大worker数 = 账号数 × 每账号设备数。"""
+    return len(_ACCOUNTS) * MAX_DEVICES_PER_ACCOUNT
 
 # 全局限流事件
 rate_limit_event = asyncio.Event()
@@ -470,8 +487,8 @@ async def cmd_update(args):
     for f in funds:
         await queue.put(f)
 
-    # 创建clients和workers (每个worker独立DEVICE_ID, 账号2最多15个设备)
-    n_workers = min(args.workers, 15)
+    # 创建clients和workers (受限于账号×设备数)
+    n_workers = min(args.workers, max_workers_available())
     clients = []
     workers = []
     start_time = time.time()
@@ -563,9 +580,16 @@ async def cmd_expand(args):
 
     logger.info("从第%d页开始收集基金列表...", start_page)
 
+    empty_streak = 0  # 连续无新基金的页数
+    MAX_EMPTY_STREAK = 20  # 连续20页没新基金才停止
+
     while collected < args.daily_limit:
         try:
-            result = await fund_scraper.advanced_search(page=page, pagesize=300)
+            # price_date 降序: 最近有净值更新的基金排前面，效率最高
+            result = await fund_scraper.advanced_search(
+                page=page, pagesize=300,
+                order_by="price_date", order=1,  # 1=降序，活跃基金优先
+            )
         except RateLimitError:
             logger.warning("列表限流, 等60s")
             await asyncio.sleep(60)
@@ -582,14 +606,32 @@ async def cmd_expand(args):
         normalized = [fund_scraper._normalize_advanced(f) for f in batch]
         new_funds = [f for f in normalized if f["encode_id"] not in existing_ids]
 
+        if not new_funds:
+            empty_streak += 1
+            if empty_streak >= MAX_EMPTY_STREAK:
+                logger.info("连续%d页无新基金，停止收集 (页=%d)", MAX_EMPTY_STREAK, page)
+                break
+        else:
+            empty_streak = 0
+
+        # 列表阶段预过滤: price_date 为空或2026年前的直接跳过
+        skipped_list = 0
         for f in new_funds:
             if collected >= args.daily_limit:
                 break
             existing_ids.add(f["encode_id"])
+            if quality_filter:
+                pd = _parse_date(f.get("latest_nav_date"))
+                if pd is None or pd.year < 2026:
+                    skipped_list += 1
+                    async with stats_lock:
+                        stats["skipped_no_2026"] += 1
+                    continue
             await queue.put(f)
             collected += 1
 
-        logger.info("第%d页: %d只, 新%d只, 队列=%d", page, len(batch), len(new_funds), collected)
+        logger.info("第%d页: %d只, 新%d只, 跳过%d只(无2026), 队列=%d",
+                     page, len(batch), len(new_funds), skipped_list, collected)
         page += 1
         await asyncio.sleep(0.5)
 
@@ -597,8 +639,8 @@ async def cmd_expand(args):
 
     logger.info("共收集 %d 只新基金, 开始NAV抓取...", collected)
 
-    # 创建workers抓取NAV (每个worker独立DEVICE_ID, 最多15个)
-    n_workers = min(args.workers, 15)
+    # 创建workers抓取NAV (受限于账号×设备数)
+    n_workers = min(args.workers, max_workers_available())
     clients = []
     workers_list = []
     start_time = time.time()
@@ -701,6 +743,229 @@ async def cmd_status(args):
           f"发现{progress.get('total_discovered', 0)}只, "
           f"有NAV{progress.get('total_with_nav', 0)}只")
 
+    # 展示上次survey结果
+    survey_file = Path(__file__).parent / ".survey_result.json"
+    if survey_file.exists():
+        survey = json.loads(survey_file.read_text(encoding="utf-8"))
+        c = survey.get("counts", {})
+        print(f"\n上次普查 ({survey.get('scan_date', '?')}):")
+        print(f"  2026年活跃: {c.get('year_2026', 0):,}只 ({survey.get('active_pct', 0)}%)")
+        print(f"  2025年:     {c.get('year_2025', 0):,}只")
+        print(f"  2024年:     {c.get('year_2024', 0):,}只")
+        print(f"  更早:       {c.get('before_2024', 0):,}只")
+        print(f"  无数据:     {c.get('no_price_date', 0):,}只")
+
+    # 查询火富牛平台总基金数
+    try:
+        acct = get_worker_account(0)
+        client = Fof99Client(
+            username=acct["username"],
+            password=acct["password"],
+            device_id=acct["device_id"],
+        )
+        await client.login()
+        scraper = FundScraper(client)
+        result = await scraper.advanced_search(page=1, pagesize=1)
+        remote_total = result.get("total", 0)
+        await client.close()
+        coverage = total / remote_total * 100 if remote_total > 0 else 0
+        remaining = remote_total - total
+        pages_done = progress.get("last_page", 0)
+        total_pages = (remote_total + 299) // 300  # pagesize=300
+        print(f"\n火富牛平台总量: {remote_total:,}只")
+        print(f"已入库覆盖率:   {total:,}/{remote_total:,} = {coverage:.1f}%")
+        print(f"待抓取:         {remaining:,}只")
+        print(f"列表页进度:     {pages_done}/{total_pages}页")
+    except Exception as e:
+        print(f"\n火富牛总量查询失败: {e}")
+
+
+# ---------------------------------------------------------------------------
+# 主命令: cleanup — 清理火富牛设备绑定
+# ---------------------------------------------------------------------------
+
+async def cmd_cleanup(args):
+    """清理火富牛账号的已登录设备，保留当前使用的 device_id。"""
+    keep_ids = set()
+    # 保留所有 worker 会用到的 device_id
+    for i in range(max_workers_available()):
+        acct = get_worker_account(i)
+        keep_ids.add(acct["device_id"])
+
+    acct = get_worker_account(0)
+    client = Fof99Client(
+        username=acct["username"],
+        password=acct["password"],
+        device_id=acct["device_id"],
+    )
+    await client.login()
+
+    devices = await client.list_devices()
+    print(f"\n当前已登录设备: {len(devices)} 台 (上限20)")
+
+    removed = 0
+    kept = 0
+    for dev in devices:
+        did = dev.get("browser_code", "")
+        rec_id = dev.get("id")
+        last_login = dev.get("last_login_time", "")
+        if did in keep_ids:
+            print(f"  [保留] {did[:12]}... {last_login} (worker设备)")
+            kept += 1
+        elif args.dry_run:
+            print(f"  [待删] {did[:12]}... {last_login}")
+            removed += 1
+        else:
+            await client.unbind_device(rec_id)
+            print(f"  [已删] {did[:12]}... {last_login}")
+            removed += 1
+
+    await client.close()
+    action = "将删除" if args.dry_run else "已删除"
+    print(f"\n{action}: {removed} 台, 保留: {kept} 台")
+    if args.dry_run and removed > 0:
+        print("使用 --force 执行实际删除")
+
+
+# ---------------------------------------------------------------------------
+# 主命令: survey — 扫描火富牛全量基金，统计数据分布
+# ---------------------------------------------------------------------------
+
+async def cmd_survey(args):
+    """扫描火富牛全量基金列表，按 price_date 统计数据分布。
+
+    不下载NAV数据，只翻页读取列表元数据中的 price_date 字段。
+    """
+    acct = get_worker_account(0)
+    client = Fof99Client(
+        username=acct["username"],
+        password=acct["password"],
+        device_id=acct["device_id"],
+    )
+    await client.login()
+    scraper = FundScraper(client)
+
+    # 先查总数
+    result = await scraper.advanced_search(page=1, pagesize=1)
+    remote_total = result.get("total", 0)
+    total_pages = (remote_total + 299) // 300
+    print(f"\n火富牛平台总量: {remote_total:,}只, 共{total_pages}页")
+    print(f"开始扫描... (预计{total_pages * 0.5 / 60:.0f}分钟)\n")
+
+    # 统计桶
+    counts = {
+        "no_price_date": 0,       # price_date 为空
+        "before_2024": 0,         # 2024年之前
+        "year_2024": 0,           # 2024年
+        "year_2025": 0,           # 2025年
+        "year_2026": 0,           # 2026年
+    }
+    strategy_counts = {}          # 按策略分类统计
+    total_scanned = 0
+    start_time = time.time()
+
+    start_page = args.start_page if args.start_page > 0 else 1
+    page = start_page
+
+    while page <= total_pages:
+        try:
+            result = await scraper.advanced_search(
+                page=page, pagesize=300,
+                order_by="price_date", order=1,  # 降序，有数据的在前面
+            )
+        except RateLimitError:
+            logger.warning("限流, 等30s")
+            await asyncio.sleep(30)
+            continue
+        except Exception as e:
+            logger.error("第%d页失败: %s", page, e)
+            break
+
+        batch = result.get("list", [])
+        if not batch:
+            break
+
+        for f in batch:
+            total_scanned += 1
+            pd_str = f.get("price_date") or ""
+            pd = _parse_date(pd_str)
+            strat = f.get("strategy_one") or "未分类"
+
+            if pd is None:
+                counts["no_price_date"] += 1
+            elif pd.year >= 2026:
+                counts["year_2026"] += 1
+            elif pd.year == 2025:
+                counts["year_2025"] += 1
+            elif pd.year == 2024:
+                counts["year_2024"] += 1
+            else:
+                counts["before_2024"] += 1
+
+            # 按策略分类统计有2026数据的
+            if pd and pd.year >= 2026:
+                strategy_counts[strat] = strategy_counts.get(strat, 0) + 1
+
+        # 每50页输出进度
+        if page % 50 == 0 or page == total_pages:
+            elapsed = time.time() - start_time
+            rate = total_scanned / elapsed if elapsed > 0 else 0
+            eta = (remote_total - total_scanned) / rate if rate > 0 else 0
+            logger.info(
+                "扫描进度: %d/%d页 (%d只) | 有2026=%d 无数据=%d | %.0f秒 ETA %.0f秒",
+                page, total_pages, total_scanned,
+                counts["year_2026"], counts["no_price_date"],
+                elapsed, eta
+            )
+
+        page += 1
+        await asyncio.sleep(args.delay)
+
+    await client.close()
+
+    elapsed = time.time() - start_time
+
+    # 输出报告
+    print("=" * 60)
+    print(f"火富牛基金数据分布报告")
+    print(f"扫描: {total_scanned:,}只 / {remote_total:,}只, 耗时{elapsed/60:.1f}分钟")
+    print("=" * 60)
+
+    active_2026 = counts["year_2026"]
+    active_pct = active_2026 / total_scanned * 100 if total_scanned > 0 else 0
+
+    print(f"\n按最后净值日期(price_date)分布:")
+    print(f"  2026年(活跃):      {counts['year_2026']:>8,}只  ({counts['year_2026']/total_scanned*100:.1f}%)")
+    print(f"  2025年:            {counts['year_2025']:>8,}只  ({counts['year_2025']/total_scanned*100:.1f}%)")
+    print(f"  2024年:            {counts['year_2024']:>8,}只  ({counts['year_2024']/total_scanned*100:.1f}%)")
+    print(f"  2024年之前:        {counts['before_2024']:>8,}只  ({counts['before_2024']/total_scanned*100:.1f}%)")
+    print(f"  无净值数据:        {counts['no_price_date']:>8,}只  ({counts['no_price_date']/total_scanned*100:.1f}%)")
+    print(f"\n结论: 火富牛{remote_total:,}只基金中，{active_2026:,}只({active_pct:.1f}%)有2026年数据，可抓取入库")
+
+    inactive = total_scanned - active_2026
+    inactive_pct = inactive / total_scanned * 100 if total_scanned > 0 else 0
+    print(f"       {inactive:,}只({inactive_pct:.1f}%)为空数据或已停止更新，不值得抓取")
+
+    if strategy_counts:
+        print(f"\n2026年活跃基金 — 策略分布 (Top 15):")
+        sorted_strats = sorted(strategy_counts.items(), key=lambda x: -x[1])[:15]
+        for strat, cnt in sorted_strats:
+            print(f"  {strat:20s}: {cnt:>6,}只")
+
+    # 保存survey结果
+    survey_file = Path(__file__).parent / ".survey_result.json"
+    survey_data = {
+        "scan_date": str(date.today()),
+        "remote_total": remote_total,
+        "total_scanned": total_scanned,
+        "counts": counts,
+        "strategy_counts": strategy_counts,
+        "active_pct": round(active_pct, 1),
+        "elapsed_seconds": round(elapsed, 1),
+    }
+    survey_file.write_text(json.dumps(survey_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\n结果已保存: {survey_file}")
+
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -724,6 +989,14 @@ async def main():
 
     p_status = sub.add_parser("status", help="查看状态")
 
+    p_cleanup = sub.add_parser("cleanup", help="清理火富牛设备绑定")
+    p_cleanup.add_argument("--dry-run", action="store_true", default=True, help="预览模式(默认)")
+    p_cleanup.add_argument("--force", dest="dry_run", action="store_false", help="执行实际删除")
+
+    p_survey = sub.add_parser("survey", help="扫描火富牛全量基金，统计数据分布")
+    p_survey.add_argument("--start-page", type=int, default=0, help="起始页码")
+    p_survey.add_argument("--delay", type=float, default=0.3, help="请求间隔(秒)")
+
     args = parser.parse_args()
 
     if args.command == "update":
@@ -732,6 +1005,10 @@ async def main():
         await cmd_expand(args)
     elif args.command == "status":
         await cmd_status(args)
+    elif args.command == "cleanup":
+        await cmd_cleanup(args)
+    elif args.command == "survey":
+        await cmd_survey(args)
     else:
         parser.print_help()
 

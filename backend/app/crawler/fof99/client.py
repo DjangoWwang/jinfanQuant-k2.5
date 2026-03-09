@@ -181,6 +181,20 @@ class Fof99Client:
         self._authenticated = True
 
     # ------------------------------------------------------------------
+    # Device management
+    # ------------------------------------------------------------------
+
+    async def list_devices(self) -> list[dict]:
+        """获取当前账号的已登录设备列表。"""
+        data = await self.api_get("/newgoapi/login/loginManageList")
+        return data.get("list", [])
+
+    async def unbind_device(self, device_record_id: int) -> bool:
+        """解绑指定设备 (传入 loginManageList 返回的 id 字段)。"""
+        data = await self.api_post("/newgoapi/login/unbindBrowser", json_body={"id": device_record_id})
+        return True
+
+    # ------------------------------------------------------------------
     # Generic request helpers (with rate limiting and retry)
     # ------------------------------------------------------------------
 
