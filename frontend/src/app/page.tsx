@@ -217,12 +217,17 @@ export default function DashboardPage() {
           const m: ProductMetrics = {};
           if (inceptionMetrics.status === "fulfilled") {
             const im = inceptionMetrics.value;
+            m.total_return = im.total_return;
             m.annualized_return = im.annualized_return;
             m.max_drawdown = im.max_drawdown;
+            m.annualized_volatility = im.annualized_volatility;
             m.sharpe_ratio = im.sharpe_ratio;
+            m.sortino_ratio = im.sortino_ratio;
+            m.calmar_ratio = im.calmar_ratio;
             m.monthly_win_rate = im.monthly_win_rate;
             m.quarterly_win_rate = im.quarterly_win_rate;
             m.new_high_weeks = im.new_high_weeks;
+            m.return_drawdown_ratio = im.return_drawdown_ratio;
           }
           if (weekMetrics.status === "fulfilled") m.week_return = weekMetrics.value.total_return;
           if (monthMetrics.status === "fulfilled") m.month_return = monthMetrics.value.total_return;

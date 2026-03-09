@@ -303,10 +303,13 @@ def calc_win_rate(nav_series: pd.Series, freq: str = "M") -> float:
 
     *freq*: ``"M"`` for monthly, ``"Q"`` for quarterly.
     """
+    if freq not in ("M", "Q"):
+        raise ValueError("freq must be 'M' (monthly) or 'Q' (quarterly)")
     s = nav_series.sort_index().dropna()
     if len(s) < 2:
         return 0.0
-    resampled = s.resample("ME" if freq == "M" else "QE").last().dropna()
+    rule = "ME" if freq == "M" else "QE"
+    resampled = s.resample(rule).last().dropna()
     if len(resampled) < 2:
         return 0.0
     rets = resampled.pct_change().dropna()
@@ -316,16 +319,16 @@ def calc_win_rate(nav_series: pd.Series, freq: str = "M") -> float:
 
 
 def calc_new_high_weeks(nav_series: pd.Series) -> int:
-    """Count weeks where NAV reached a new all-time high."""
+    """Count weeks where NAV reached a new all-time high (excluding first week)."""
     s = nav_series.sort_index().dropna()
     if len(s) < 2:
         return 0
     weekly = s.resample("W").last().dropna()
-    if len(weekly) < 1:
+    if len(weekly) < 2:
         return 0
-    cummax = weekly.cummax()
-    # A week is "new high" if its value equals the running max
-    return int((weekly >= cummax).sum())
+    prev_cummax = weekly.cummax().shift(1)
+    # A week is "new high" if its value strictly exceeds previous cumulative max
+    return int((weekly > prev_cummax).sum())
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +357,7 @@ def calc_all_metrics(
     monthly_win = calc_win_rate(s, "M")
     quarterly_win = calc_win_rate(s, "Q")
     new_highs = calc_new_high_weeks(s)
-    ret_dd_ratio = float(abs(ann_ret / mdd)) if mdd != 0 else 0.0
+    ret_dd_ratio = float(abs(ann_ret / mdd)) if mdd != 0 else (99.99 if ann_ret > 0 else 0.0)
 
     return {
         "total_return": total_ret,

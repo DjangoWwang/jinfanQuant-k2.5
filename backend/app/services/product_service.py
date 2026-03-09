@@ -496,8 +496,8 @@ class ProductService:
                     return [
                         NavSeriesPoint(
                             date=row.nav_date,
-                            unit_nav=float(row.unit_nav) if row.unit_nav else None,
-                            cumulative_nav=float(row.cumulative_nav) if row.cumulative_nav else None,
+                            unit_nav=float(row.unit_nav) if row.unit_nav is not None else None,
+                            cumulative_nav=float(row.cumulative_nav) if row.cumulative_nav is not None else None,
                             total_nav=None,
                         )
                         for row in rows
@@ -523,8 +523,8 @@ class ProductService:
         return [
             NavSeriesPoint(
                 date=row.valuation_date,
-                unit_nav=float(row.unit_nav) if row.unit_nav else None,
-                total_nav=float(row.total_nav) if row.total_nav else None,
+                unit_nav=float(row.unit_nav) if row.unit_nav is not None else None,
+                total_nav=float(row.total_nav) if row.total_nav is not None else None,
             )
             for row in rows
         ]

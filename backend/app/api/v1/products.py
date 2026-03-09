@@ -6,6 +6,7 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
+import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -342,13 +343,16 @@ async def get_factor_exposure(
 # Product metrics
 # ------------------------------------------------------------------
 
+_VALID_PRESETS = {"wtd", "mtd", "qtd", "ytd", "1m", "3m", "6m", "1y", "2y", "3y", "5y", "inception"}
+
+
 @router.get("/{product_id}/nav/metrics", response_model=ProductMetricsResponse)
 async def get_product_metrics(
     product_id: int,
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
-    preset: Optional[str] = Query(None, description="ytd, 1y, 3y, inception..."),
-    risk_free_rate: float = Query(0.02),
+    preset: Optional[str] = Query(None, description="wtd, ytd, 1m, 3m, 6m, 1y, 3y, inception..."),
+    risk_free_rate: float = Query(0.02, ge=-0.5, le=1.0),
     db: AsyncSession = Depends(get_db),
 ):
     """Get product performance metrics calculated from cumulative NAV."""
@@ -358,11 +362,11 @@ async def get_product_metrics(
     if not product:
         raise HTTPException(status_code=404, detail="产品不存在")
 
-    if preset and not start_date:
-        try:
-            start_date, end_date = interval_dates(preset)
-        except ValueError:
+    if preset:
+        if preset not in _VALID_PRESETS:
             raise HTTPException(status_code=400, detail=f"无效的区间预设: {preset}")
+        if not start_date:
+            start_date, end_date = interval_dates(preset)
 
     # Build NAV series from product's nav data (prefers cumulative_nav)
     nav_points = await product_service.get_nav_series(db, product_id, start_date, end_date)
@@ -372,19 +376,25 @@ async def get_product_metrics(
         db, product_id, start_date, end_date,
     )
 
-    import pandas as pd
+    def _pick_nav(cumulative, unit):
+        """Pick cumulative_nav if available, else unit_nav. Explicit None check."""
+        if cumulative is not None:
+            return float(cumulative)
+        if unit is not None:
+            return float(unit)
+        return None
 
     if calc_records:
         pairs = [
-            (r.nav_date, float(r.cumulative_nav or r.unit_nav or 0))
+            (r.nav_date, v)
             for r in calc_records
-            if r.cumulative_nav is not None or r.unit_nav is not None
+            if (v := _pick_nav(r.cumulative_nav, r.unit_nav)) is not None and v > 0
         ]
     elif nav_points:
         pairs = [
-            (p.date, float(p.cumulative_nav or p.unit_nav or 0))
+            (p.date, v)
             for p in nav_points
-            if p.cumulative_nav is not None or p.unit_nav is not None
+            if (v := _pick_nav(p.cumulative_nav, p.unit_nav)) is not None and v > 0
         ]
     else:
         raise HTTPException(status_code=404, detail="该产品无净值数据")
@@ -402,8 +412,8 @@ async def get_product_metrics(
     return ProductMetricsResponse(
         product_id=product_id,
         product_name=product.product_name,
-        start_date=first_date.date() if hasattr(first_date, 'date') else first_date,
-        end_date=last_date.date() if hasattr(last_date, 'date') else last_date,
+        start_date=first_date.date() if isinstance(first_date, pd.Timestamp) else first_date,
+        end_date=last_date.date() if isinstance(last_date, pd.Timestamp) else last_date,
         **{k: v for k, v in m.items() if k not in ("max_dd_peak", "max_dd_trough")},
         max_dd_peak=m.get("max_dd_peak"),
         max_dd_trough=m.get("max_dd_trough"),
@@ -434,7 +444,7 @@ async def get_product_nav(
         db, product_id, start_date, end_date,
     )
     if calc_records:
-        nav_series = [
+        nav_series_list = [
             NavSeriesPoint(
                 date=r.nav_date,
                 unit_nav=float(r.unit_nav) if r.unit_nav is not None else None,
@@ -446,15 +456,15 @@ async def get_product_nav(
         return ProductNavResponse(
             product_id=product_id,
             product_name=product.product_name,
-            nav_series=nav_series,
+            nav_series=nav_series_list,
         )
 
     # Fallback to existing logic (linked fund / valuation snapshots)
-    nav_series = await product_service.get_nav_series(
+    nav_series_fallback = await product_service.get_nav_series(
         db, product_id, start_date, end_date
     )
     return ProductNavResponse(
         product_id=product_id,
         product_name=product.product_name,
-        nav_series=nav_series,
+        nav_series=nav_series_fallback,
     )
