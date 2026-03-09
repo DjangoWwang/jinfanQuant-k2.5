@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m alembic revision --autogenerate -m \"expand_products_table_phase4\")",
+      "Bash(python -c \"from app.main import app; print\\(''Backend imports OK''\\)\")",
+      "Bash(curl -s http://localhost:8000/api/v1/products/)",
+      "Bash(__NEW_LINE_b5d6ed6da2ffba0f__ echo -e \"\\\\n=== Re-upload 0227 ===\")",
+      "Bash(curl -s -X POST http://localhost:8000/api/v1/products/2/valuation -F \"file=@D:/AI/Claude code/FOF平台开发/估值表日报-GF1077-博孚利鹭岛晋帆私募证券投资基金-4-20260227.xlsx\")",
+      "Bash(python -c \":*)",
+      "Bash(__NEW_LINE_30eda5010bf45333__ echo -e \"\\\\n=== Latest Valuation \\(sub-funds\\) ===\")",
+      "Bash(curl -s http://localhost:8000/api/v1/products/2/valuation/latest)",
+      "Bash(__NEW_LINE_e509b73fa1ee950e__ echo -e \"\\\\n=== Mobile Dashboard ===\")",
+      "Bash(curl -s http://localhost:8000/api/v1/mobile/dashboard)",
+      "Bash(python -m pytest tests/test_product_api.py -v --tb=short)",
+      "Bash(python tests/smoke_test_phase4.py)"
+    ]
+  }
+}
