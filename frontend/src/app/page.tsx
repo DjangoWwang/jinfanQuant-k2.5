@@ -15,9 +15,6 @@ import {
   Briefcase,
   Loader2,
   AlertTriangle,
-  AlertCircle,
-  Bell,
-  ShieldAlert,
   ChevronRight,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -31,7 +28,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { fetchApi, fetchApiAuth, type AlertDashboard, type AlertEvent } from "@/lib/api";
+import { fetchApi, fetchApiAuth, type AlertDashboard } from "@/lib/api";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
 
@@ -150,16 +147,13 @@ export default function DashboardPage() {
   const [navPeriod, setNavPeriod] = useState("ALL");
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const [alertDashboard, setAlertDashboard] = useState<AlertDashboard | null>(null);
-  const [alertAuthError, setAlertAuthError] = useState(false);
 
   // Load core stats + dashboard
   useEffect(() => {
     // Load alert dashboard (auth-protected, fails gracefully)
     fetchApiAuth<AlertDashboard>("/alerts/dashboard")
-      .then(data => { setAlertDashboard(data); setAlertAuthError(false); })
-      .catch(e => {
-        if (e instanceof Error && e.message === "AUTH_REQUIRED") setAlertAuthError(true);
-      });
+      .then(data => { setAlertDashboard(data); })
+      .catch(() => {});
 
     Promise.allSettled([
       fetchApi<{ total: number; items: Array<{ nav_frequency: string; strategy_type: string | null }> }>("/funds/?page=1&page_size=1")
@@ -479,88 +473,7 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* 风险预警 */}
-      <div className="bg-card border border-border rounded">
-        <div className="flex items-center justify-between px-4 py-1.5 border-b border-border">
-          <div className="flex items-center gap-2">
-            <ShieldAlert className="h-3.5 w-3.5 text-muted-foreground opacity-50" />
-            <span className="text-[13px] font-medium">风险预警</span>
-            {alertDashboard && alertDashboard.unread_total > 0 && (
-              <span className="flex items-center gap-1">
-                {(alertDashboard.alerts_by_severity?.critical ?? 0) > 0 && (
-                  <Badge className="text-[10px] bg-red-500/10 text-red-600 border-red-200 hover:bg-red-500/10 px-1.5 py-0">
-                    <AlertCircle className="h-3 w-3 mr-0.5" />
-                    {alertDashboard.alerts_by_severity.critical}
-                  </Badge>
-                )}
-                {(alertDashboard.alerts_by_severity?.warning ?? 0) > 0 && (
-                  <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-200 hover:bg-amber-500/10 px-1.5 py-0">
-                    <AlertTriangle className="h-3 w-3 mr-0.5" />
-                    {alertDashboard.alerts_by_severity.warning}
-                  </Badge>
-                )}
-              </span>
-            )}
-          </div>
-          <button
-            onClick={() => router.push("/risk-alerts")}
-            className="flex items-center gap-0.5 text-[11px] text-muted-foreground hover:text-primary transition-colors"
-          >
-            查看全部
-            <ChevronRight className="h-3 w-3" />
-          </button>
-        </div>
-        {alertAuthError ? (
-          <div className="h-24 flex items-center justify-center text-muted-foreground text-[12px]">
-            请登录后查看风险预警
-          </div>
-        ) : alertDashboard && alertDashboard.recent_events.length > 0 ? (
-          <div className="divide-y divide-border">
-            {alertDashboard.recent_events.slice(0, 5).map((event) => (
-              <div
-                key={event.id}
-                className={`px-4 py-2 hover:bg-muted/30 transition-colors flex items-center gap-3 ${!event.is_read ? "bg-primary/[0.02]" : ""}`}
-              >
-                {event.severity === "critical" ? (
-                  <AlertCircle className="h-4 w-4 text-red-500 shrink-0" />
-                ) : (
-                  <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[12px] font-medium truncate">{event.target_name}</span>
-                    {!event.is_read && (
-                      <span className="h-1.5 w-1.5 rounded-full bg-primary shrink-0" />
-                    )}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground truncate">{event.message}</div>
-                </div>
-                <span className="text-[10px] text-muted-foreground tabular-nums shrink-0 whitespace-nowrap">
-                  {(() => {
-                    try {
-                      const d = new Date(event.created_at);
-                      const diff = Date.now() - d.getTime();
-                      if (diff < 60000) return "刚刚";
-                      if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`;
-                      if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`;
-                      return d.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
-                    } catch { return event.created_at; }
-                  })()}
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="h-24 flex items-center justify-center text-muted-foreground text-[12px]">
-            <div className="text-center space-y-1">
-              <Bell className="mx-auto h-5 w-5 opacity-25" />
-              <p className="opacity-60">暂无预警事件</p>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Holdings + Alerts */}
+{/* Holdings + Alerts */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
         {/* Holdings Table */}
         <div className="lg:col-span-2 bg-card border border-border rounded">
@@ -654,26 +567,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* 策略分布 (真实数据) */}
-      {fundStats?.strategy_breakdown && fundStats.strategy_breakdown.length > 0 && (
-        <div className="bg-card border border-border rounded">
-          <div className="px-4 py-1.5 border-b border-border">
-            <span className="text-[13px] font-medium">策略分布</span>
-          </div>
-          <div className="px-4 py-3 flex flex-wrap gap-2">
-            {fundStats.strategy_breakdown.map(s => (
-              <div
-                key={s.strategy_type}
-                className="flex items-center gap-2 px-3 py-1.5 bg-muted/50 rounded text-[12px] hover:bg-muted transition-colors cursor-pointer"
-                onClick={() => router.push(`/fund-database?strategy_type=${encodeURIComponent(s.strategy_type)}`)}
-              >
-                <span className="font-medium">{s.strategy_type}</span>
-                <span className="text-muted-foreground tabular-nums">{s.count}只</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import {
@@ -242,6 +242,9 @@ export default function ProductDetailPage() {
   // Always-loaded strategy_type weights for factor comparison chart
   const [strategyTypeWeights, setStrategyTypeWeights] = useState<Record<string, number>>({});
 
+  // NAV period filter state
+  const [navPeriod, setNavPeriod] = useState("ALL");
+
   // Report generation state
   const [reportDialogOpen, setReportDialogOpen] = useState(false);
   const [reportType, setReportType] = useState("monthly");
@@ -440,6 +443,58 @@ export default function ProductDetailPage() {
     );
   }
 
+  // Filter NAV by period
+  const filteredNav = useMemo(() => {
+    if (navPeriod === "ALL") return navSeries;
+    const now = new Date();
+    let cutoff: Date;
+    switch (navPeriod) {
+      case "1M": cutoff = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate()); break;
+      case "3M": cutoff = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate()); break;
+      case "6M": cutoff = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate()); break;
+      case "YTD": cutoff = new Date(now.getFullYear(), 0, 1); break;
+      case "1Y": cutoff = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()); break;
+      default: return navSeries;
+    }
+    const cutStr = cutoff.toISOString().slice(0, 10);
+    return navSeries.filter(n => n.date >= cutStr);
+  }, [navSeries, navPeriod]);
+
+  // Calculate metrics for the filtered period
+  const navMetrics = useMemo(() => {
+    if (filteredNav.length < 2) return null;
+    const startNav = filteredNav[0].unit_nav;
+    const endNav = filteredNav[filteredNav.length - 1].unit_nav;
+    if (!startNav || !endNav) return null;
+    
+    const totalReturn = (endNav - startNav) / startNav;
+    
+    // Calculate max drawdown
+    let maxDrawdown = 0;
+    let peak = startNav;
+    for (const point of filteredNav) {
+      if (point.unit_nav) {
+        if (point.unit_nav > peak) peak = point.unit_nav;
+        const drawdown = (peak - point.unit_nav) / peak;
+        if (drawdown > maxDrawdown) maxDrawdown = drawdown;
+      }
+    }
+    
+    // Calculate annualized return
+    const startDate = new Date(filteredNav[0].date);
+    const endDate = new Date(filteredNav[filteredNav.length - 1].date);
+    const years = (endDate.getTime() - startDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+    const annualizedReturn = years > 0 ? Math.pow(1 + totalReturn, 1 / years) - 1 : 0;
+    
+    return {
+      totalReturn,
+      maxDrawdown,
+      annualizedReturn,
+      startDate: filteredNav[0].date,
+      endDate: filteredNav[filteredNav.length - 1].date,
+    };
+  }, [filteredNav]);
+
   /* --- NAV Chart --- */
   const navChartOption = {
     tooltip: {
@@ -452,7 +507,7 @@ export default function ProductDetailPage() {
     grid: { left: 50, right: 20, top: 20, bottom: 30 },
     xAxis: {
       type: "category",
-      data: navSeries.map((n) => n.date),
+      data: filteredNav.map((n) => n.date),
       axisLabel: { fontSize: 10 },
     },
     yAxis: {
@@ -464,7 +519,7 @@ export default function ProductDetailPage() {
       {
         name: "单位净值",
         type: "line",
-        data: navSeries.map((n) => n.unit_nav),
+        data: filteredNav.map((n) => n.unit_nav),
         smooth: true,
         symbol: "none",
         lineStyle: { width: 2 },
@@ -595,30 +650,89 @@ export default function ProductDetailPage() {
 
         {/* Overview tab */}
         <TabsContent value="overview" className="mt-3 space-y-4">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            {/* NAV chart */}
-            <div className="lg:col-span-2 bg-card border border-border rounded p-3">
-              <h3 className="text-[13px] font-medium mb-2">净值走势</h3>
-              {navSeries.length > 0 ? (
-                <ReactECharts option={navChartOption} style={{ height: 280 }} />
-              ) : (
-                <div className="h-[280px] flex items-center justify-center text-muted-foreground text-[12px]">
-                  暂无净值数据，请上传估值表
-                </div>
-              )}
+          {/* NAV Chart with Period Selector - Left/Right Layout */}
+          <div className="bg-card border border-border rounded">
+            <div className="flex items-center justify-between px-4 py-2 border-b border-border">
+              <h3 className="text-[13px] font-medium">净值走势</h3>
+              <div className="flex gap-0.5">
+                {["1M", "3M", "6M", "YTD", "1Y", "ALL"].map((p) => (
+                  <Button
+                    key={p}
+                    variant={p === navPeriod ? "default" : "ghost"}
+                    size="sm"
+                    className="h-6 px-2 text-[11px]"
+                    onClick={() => setNavPeriod(p)}
+                  >
+                    {p}
+                  </Button>
+                ))}
+              </div>
             </div>
+            <div className="grid grid-cols-1 lg:grid-cols-3">
+              {/* Chart - Left Side */}
+              <div className="lg:col-span-2 p-3 border-b lg:border-b-0 lg:border-r border-border">
+                {filteredNav.length > 0 ? (
+                  <ReactECharts option={navChartOption} style={{ height: 300 }} />
+                ) : (
+                  <div className="h-[300px] flex items-center justify-center text-muted-foreground text-[12px]">
+                    暂无净值数据，请上传估值表
+                  </div>
+                )}
+              </div>
+              {/* Metrics - Right Side */}
+              <div className="p-3">
+                <h4 className="text-[12px] font-medium text-muted-foreground mb-3">区间统计指标</h4>
+                {navMetrics ? (
+                  <div className="space-y-3">
+                    <div className="bg-muted/40 rounded p-3">
+                      <div className="text-[11px] text-muted-foreground">区间收益</div>
+                      <div className={`text-xl font-semibold tabular-nums ${navMetrics.totalReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        {navMetrics.totalReturn >= 0 ? '+' : ''}{(navMetrics.totalReturn * 100).toFixed(2)}%
+                      </div>
+                      <div className="text-[10px] text-muted-foreground mt-1">
+                        {navMetrics.startDate} ~ {navMetrics.endDate}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="bg-muted/40 rounded p-2">
+                        <div className="text-[11px] text-muted-foreground">年化收益</div>
+                        <div className={`text-base font-medium tabular-nums ${navMetrics.annualizedReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {navMetrics.annualizedReturn >= 0 ? '+' : ''}{(navMetrics.annualizedReturn * 100).toFixed(2)}%
+                        </div>
+                      </div>
+                      <div className="bg-muted/40 rounded p-2">
+                        <div className="text-[11px] text-muted-foreground">最大回撤</div>
+                        <div className="text-base font-medium tabular-nums text-red-600">
+                          -{(navMetrics.maxDrawdown * 100).toFixed(2)}%
+                        </div>
+                      </div>
+                    </div>
+                    <div className="bg-muted/40 rounded p-2">
+                      <div className="text-[11px] text-muted-foreground">当前净值</div>
+                      <div className="text-lg font-semibold tabular-nums">
+                        {filteredNav[filteredNav.length - 1]?.unit_nav?.toFixed(4) ?? '--'}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="h-[200px] flex items-center justify-center text-muted-foreground text-[12px]">
+                    选择时间区间查看统计指标
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
 
-            {/* Sub-fund allocation pie */}
-            <div className="bg-card border border-border rounded p-3">
-              <h3 className="text-[13px] font-medium mb-2">子基金配置</h3>
-              {pieData.length > 0 ? (
-                <ReactECharts option={pieChartOption} style={{ height: 280 }} />
-              ) : (
-                <div className="h-[280px] flex items-center justify-center text-muted-foreground text-[12px]">
-                  暂无持仓数据
-                </div>
-              )}
-            </div>
+          {/* Sub-fund allocation pie */}
+          <div className="bg-card border border-border rounded p-3">
+            <h3 className="text-[13px] font-medium mb-2">子基金配置</h3>
+            {pieData.length > 0 ? (
+              <ReactECharts option={pieChartOption} style={{ height: 280 }} />
+            ) : (
+              <div className="h-[280px] flex items-center justify-center text-muted-foreground text-[12px]">
+                暂无持仓数据
+              </div>
+            )}
           </div>
 
           {/* Sub-fund table */}

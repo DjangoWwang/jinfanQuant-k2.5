@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { Search, X, Loader2, BarChart3, AlertTriangle } from "lucide-react";
+import { Search, X, Loader2, BarChart3, AlertTriangle, Save, FolderOpen, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -49,6 +49,15 @@ interface CompareResponse {
   metrics: CompareMetricsItem[];
 }
 
+interface SavedComparison {
+  id: string;
+  name: string;
+  fund_ids: number[];
+  fund_names: string[];
+  interval: string;
+  created_at: string;
+}
+
 /* ─── Helpers ─── */
 
 function pct(v: number | null | undefined): string {
@@ -75,6 +84,70 @@ export default function ComparisonPage() {
   const [compareData, setCompareData] = useState<CompareResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Saved comparisons
+  const [savedComparisons, setSavedComparisons] = useState<SavedComparison[]>([]);
+  const [saveName, setSaveName] = useState("");
+  const [showSaveInput, setShowSaveInput] = useState(false);
+
+  // Load saved comparisons from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem("jinfan_saved_comparisons");
+    if (saved) {
+      try {
+        setSavedComparisons(JSON.parse(saved));
+      } catch {
+        setSavedComparisons([]);
+      }
+    }
+  }, []);
+
+  // Save comparisons to localStorage
+  const persistSavedComparisons = useCallback((comparisons: SavedComparison[]) => {
+    localStorage.setItem("jinfan_saved_comparisons", JSON.stringify(comparisons));
+    setSavedComparisons(comparisons);
+  }, []);
+
+  // Save current comparison
+  const saveComparison = useCallback(() => {
+    if (selectedFunds.length < 2 || !saveName.trim()) return;
+    const newComparison: SavedComparison = {
+      id: Date.now().toString(),
+      name: saveName.trim(),
+      fund_ids: selectedFunds.map(f => f.id),
+      fund_names: selectedFunds.map(f => f.fund_name),
+      interval,
+      created_at: new Date().toISOString(),
+    };
+    const updated = [newComparison, ...savedComparisons].slice(0, 20); // Keep last 20
+    persistSavedComparisons(updated);
+    setSaveName("");
+    setShowSaveInput(false);
+  }, [selectedFunds, saveName, interval, savedComparisons, persistSavedComparisons]);
+
+  // Load a saved comparison
+  const loadComparison = useCallback(async (comparison: SavedComparison) => {
+    // Fetch fund details for the saved IDs
+    try {
+      const fundPromises = comparison.fund_ids.map(id =>
+        fetchApi<FundSearchItem>(`/funds/${id}`).catch(() => null)
+      );
+      const funds = (await Promise.all(fundPromises)).filter((f): f is FundSearchItem => f !== null);
+      if (funds.length >= 2) {
+        setSelectedFunds(funds);
+        setInterval(comparison.interval);
+        setCompareData(null);
+      }
+    } catch {
+      // Ignore errors
+    }
+  }, []);
+
+  // Delete a saved comparison
+  const deleteComparison = useCallback((id: string) => {
+    const updated = savedComparisons.filter(c => c.id !== id);
+    persistSavedComparisons(updated);
+  }, [savedComparisons, persistSavedComparisons]);
 
   // 搜索基金
   useEffect(() => {
@@ -193,6 +266,40 @@ export default function ComparisonPage() {
     <div className="space-y-3">
       <PageHeader title="基金比较" description="选择2-10只基金进行对比分析" />
 
+      {/* Saved Comparisons */}
+      {savedComparisons.length > 0 && (
+        <div className="bg-card border border-border rounded px-4 py-2">
+          <div className="flex items-center gap-2 mb-2">
+            <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-[12px] text-muted-foreground">已保存的对比方案</span>
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            {savedComparisons.map((comparison) => (
+              <div
+                key={comparison.id}
+                className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-[11px] bg-muted/50 border border-border hover:bg-muted transition-colors"
+              >
+                <button
+                  onClick={() => loadComparison(comparison)}
+                  className="hover:text-primary"
+                >
+                  {comparison.name}
+                </button>
+                <span className="text-muted-foreground">
+                  ({comparison.fund_names.length}只·{comparison.interval})
+                </span>
+                <button
+                  onClick={() => deleteComparison(comparison.id)}
+                  className="hover:text-destructive ml-1"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* 基金选择器 */}
       <div className="bg-card border border-border rounded px-4 py-3 space-y-2">
         <div className="flex items-center gap-2">
@@ -232,7 +339,37 @@ export default function ComparisonPage() {
             {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
             开始比较
           </Button>
+          {compareData && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-[12px] gap-1"
+              onClick={() => setShowSaveInput(!showSaveInput)}
+            >
+              <Save className="h-3.5 w-3.5" />
+              保存方案
+            </Button>
+          )}
         </div>
+
+        {/* Save input */}
+        {showSaveInput && (
+          <div className="flex items-center gap-2 pt-1">
+            <Input
+              placeholder="输入方案名称..."
+              value={saveName}
+              onChange={(e) => setSaveName(e.target.value)}
+              className="h-7 text-[12px] max-w-xs"
+              onKeyDown={(e) => e.key === "Enter" && saveComparison()}
+            />
+            <Button size="sm" className="h-7 text-[11px] px-2" onClick={saveComparison} disabled={!saveName.trim()}>
+              确认
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7 text-[11px] px-2" onClick={() => setShowSaveInput(false)}>
+              取消
+            </Button>
+          </div>
+        )}
 
         {/* 已选基金标签 */}
         {selectedFunds.length > 0 && (
