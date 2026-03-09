@@ -19,6 +19,14 @@ import pandas as pd
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _ensure_datetime_index(nav_series: pd.Series) -> pd.Series:
+    """Ensure the Series has a DatetimeIndex (convert from date if needed)."""
+    if not isinstance(nav_series.index, pd.DatetimeIndex):
+        nav_series = nav_series.copy()
+        nav_series.index = pd.DatetimeIndex(nav_series.index)
+    return nav_series
+
+
 def _daily_returns(nav_series: pd.Series) -> pd.Series:
     """Compute simple daily returns from a NAV series."""
     return nav_series.pct_change().dropna()
@@ -30,7 +38,7 @@ def _slice(
     end_date: Optional[datetime.date] = None,
 ) -> pd.Series:
     """Slice the NAV series by optional start/end dates."""
-    s = nav_series.sort_index()
+    s = _ensure_datetime_index(nav_series).sort_index()
     if start_date is not None:
         s = s[s.index >= pd.Timestamp(start_date)]
     if end_date is not None:
@@ -98,7 +106,12 @@ def calc_annualized_return(
         return -1.0
     # Guard against blow-up: when very few data points (e.g. 2-3 NAVs),
     # exp can be huge (365/1=365), making 1.05^365 astronomical.
-    # Cap the annualized return at +/- 9999% (ratio ±99.99).
+    # Pre-clamp via log to avoid overflow in pow(): |log(base)*exp| <= log(100)
+    import math
+    log_base = math.log(base)
+    if abs(log_base * exp) > math.log(100):
+        # Result would exceed ±9999%; return capped value directly
+        return 99.99 if log_base > 0 else -0.9999
     ann = base ** exp - 1
     ann = max(min(ann, 99.99), -0.9999)
     return float(ann)
@@ -135,7 +148,7 @@ def calc_max_drawdown(
 
 def calc_drawdown_series(nav_series: pd.Series) -> pd.Series:
     """Compute the full drawdown series (values <= 0)."""
-    s = nav_series.sort_index().dropna()
+    s = _ensure_datetime_index(nav_series).sort_index().dropna()
     if len(s) < 2:
         return pd.Series(dtype=float)
     cummax = s.cummax()
@@ -167,7 +180,7 @@ def calc_downside_deviation(
 
     ``DD = sqrt( sum(min(Xi-rf,0)^2) / (n-1) ) * sqrt(ann_factor)``
     """
-    s = nav_series.sort_index().dropna()
+    s = _ensure_datetime_index(nav_series).sort_index().dropna()
     rets = _daily_returns(s)
     n = len(rets)
     if n < 2:
@@ -305,7 +318,7 @@ def calc_win_rate(nav_series: pd.Series, freq: str = "M") -> float:
     """
     if freq not in ("M", "Q"):
         raise ValueError("freq must be 'M' (monthly) or 'Q' (quarterly)")
-    s = nav_series.sort_index().dropna()
+    s = _ensure_datetime_index(nav_series).sort_index().dropna()
     if len(s) < 2:
         return 0.0
     rule = "ME" if freq == "M" else "QE"
@@ -320,7 +333,7 @@ def calc_win_rate(nav_series: pd.Series, freq: str = "M") -> float:
 
 def calc_new_high_weeks(nav_series: pd.Series) -> int:
     """Count weeks where NAV reached a new all-time high (excluding first week)."""
-    s = nav_series.sort_index().dropna()
+    s = _ensure_datetime_index(nav_series).sort_index().dropna()
     if len(s) < 2:
         return 0
     weekly = s.resample("W").last().dropna()

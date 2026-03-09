@@ -171,8 +171,8 @@ class ProductService:
         stats: dict[int, dict] = {pid: {} for pid in product_ids}
         for row in latest_rows:
             stats[row.product_id] = {
-                "unit_nav": float(row.unit_nav) if row.unit_nav else None,
-                "total_nav": float(row.total_nav) if row.total_nav else None,
+                "unit_nav": float(row.unit_nav) if row.unit_nav is not None else None,
+                "total_nav": float(row.total_nav) if row.total_nav is not None else None,
                 "valuation_date": row.valuation_date,
             }
 
