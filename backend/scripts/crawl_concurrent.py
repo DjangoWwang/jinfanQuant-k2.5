@@ -606,16 +606,9 @@ async def cmd_expand(args):
         normalized = [fund_scraper._normalize_advanced(f) for f in batch]
         new_funds = [f for f in normalized if f["encode_id"] not in existing_ids]
 
-        if not new_funds:
-            empty_streak += 1
-            if empty_streak >= MAX_EMPTY_STREAK:
-                logger.info("连续%d页无新基金，停止收集 (页=%d)", MAX_EMPTY_STREAK, page)
-                break
-        else:
-            empty_streak = 0
-
         # 列表阶段预过滤: price_date 为空或2026年前的直接跳过
         skipped_list = 0
+        added_this_page = 0
         for f in new_funds:
             if collected >= args.daily_limit:
                 break
@@ -629,9 +622,25 @@ async def cmd_expand(args):
                     continue
             await queue.put(f)
             collected += 1
+            added_this_page += 1
 
-        logger.info("第%d页: %d只, 新%d只, 跳过%d只(无2026), 队列=%d",
-                     page, len(batch), len(new_funds), skipped_list, collected)
+        # empty_streak: 连续多页没有新基金入队（含全部被过滤的情况）
+        if added_this_page == 0 and not new_funds:
+            empty_streak += 1
+        elif added_this_page == 0 and quality_filter and skipped_list == len(new_funds):
+            # 整页都是非活跃基金（price_date排序已过活跃区域），快速停止
+            empty_streak += 5  # 加速停止
+        elif added_this_page == 0:
+            empty_streak += 1
+        else:
+            empty_streak = 0
+
+        if empty_streak >= MAX_EMPTY_STREAK:
+            logger.info("连续%d页无入队基金，停止收集 (页=%d)", empty_streak, page)
+            break
+
+        logger.info("第%d页: %d只, 新%d只, 跳过%d只(无2026), 入队%d, 队列=%d",
+                     page, len(batch), len(new_funds), skipped_list, added_this_page, collected)
         page += 1
         await asyncio.sleep(0.5)
 
