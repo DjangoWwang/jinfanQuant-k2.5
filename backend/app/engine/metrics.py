@@ -10,7 +10,7 @@ from __future__ import annotations
 import calendar
 import datetime
 import math
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -80,6 +80,77 @@ def calc_return(
     if len(s) < 2:
         return 0.0
     return float(s.iloc[-1] / s.iloc[0] - 1)
+
+
+def calc_period_return(
+    nav_series: pd.Series,
+    start_date: Optional[datetime.date] = None,
+    end_date: Optional[datetime.date] = None,
+    inception_date: Optional[datetime.date] = None,
+) -> dict[str, Any]:
+    """Calculate period return with proper handling of inception date.
+
+    火富牛区间收益计算规则:
+    1. 如果指定了成立日期(inception_date), 统计数据从该日期开始
+    2. 如果start_date早于第一个数据点,使用第一个数据点作为起点
+    3. 返回包含收益率、起始净值、结束净值的详细信息
+
+    Args:
+        nav_series: NAV序列
+        start_date: 区间开始日期(可选)
+        end_date: 区间结束日期(可选)
+        inception_date: 基金成立日期(可选),如鹭岛晋帆2025.5.23
+
+    Returns:
+        {
+            "return": float,  # 区间收益率
+            "start_nav": float,  # 起始净值
+            "end_nav": float,  # 结束净值
+            "start_date": str,  # 实际起始日期
+            "end_date": str,  # 实际结束日期
+        }
+    """
+    s = _slice(nav_series, start_date, end_date).sort_index().dropna()
+
+    # 处理成立日期截断(如鹭岛晋帆从2025.5.23开始)
+    if inception_date is not None:
+        s = s[s.index >= pd.Timestamp(inception_date)]
+
+    if len(s) < 1:
+        return {
+            "return": 0.0,
+            "start_nav": 0.0,
+            "end_nav": 0.0,
+            "start_date": "",
+            "end_date": "",
+        }
+
+    if len(s) < 2:
+        # 只有一个数据点,收益率为0
+        start_nav = end_nav = float(s.iloc[0])
+        start_date_str = end_date_str = s.index[0].strftime("%Y-%m-%d")
+        return {
+            "return": 0.0,
+            "start_nav": start_nav,
+            "end_nav": end_nav,
+            "start_date": start_date_str,
+            "end_date": end_date_str,
+        }
+
+    start_nav = float(s.iloc[0])
+    end_nav = float(s.iloc[-1])
+    period_return = end_nav / start_nav - 1
+
+    start_date_str = s.index[0].strftime("%Y-%m-%d")
+    end_date_str = s.index[-1].strftime("%Y-%m-%d")
+
+    return {
+        "return": period_return,
+        "start_nav": start_nav,
+        "end_nav": end_nav,
+        "start_date": start_date_str,
+        "end_date": end_date_str,
+    }
 
 
 def calc_annualized_return(
@@ -394,18 +465,35 @@ def calc_interval_metrics(
     presets: list[str],
     risk_free_rate: float = 0.02,
     reference_date: Optional[datetime.date] = None,
+    inception_date: Optional[datetime.date] = None,
 ) -> dict[str, dict]:
     """Compute metrics for multiple interval presets at once.
 
-    Returns a dict mapping preset name to its metrics dict.
+    Args:
+        nav_series: NAV序列
+        presets: 区间预设列表 (wtd, mtd, ytd, 1m, 3m, 1y, inception等)
+        risk_free_rate: 无风险利率
+        reference_date: 参考日期(默认为今天)
+        inception_date: 基金成立日期,用于截断早期数据
+
+    Returns:
+        dict mapping preset name to its metrics dict.
     """
     result = {}
     for preset in presets:
         try:
             sd, ed = interval_dates(preset, reference_date)
             s = _slice(nav_series, sd, ed)
+
+            # 应用成立日期截断
+            if inception_date is not None:
+                s = s[s.index >= pd.Timestamp(inception_date)]
+
             if len(s) >= 2:
                 result[preset] = calc_all_metrics(s, risk_free_rate)
+                # 添加区间收益详细信息
+                period_info = calc_period_return(nav_series, sd, ed, inception_date)
+                result[preset]["period_return_detail"] = period_info
             else:
                 result[preset] = None
         except ValueError:

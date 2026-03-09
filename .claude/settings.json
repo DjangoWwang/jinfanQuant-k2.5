@@ -280,7 +280,8 @@
       "Bash(echo \"BASE: $GROK_BASE_URL\")",
       "Bash(\"D:/AI/Claude code/FOF平台开发/fof-platform/backend/phase5_s1_r4_review_minimax.md\")",
       "Bash(where claude)",
-      "Bash(xargs grep -l \"阶段二\\\\|Phase 2\\\\|净值数据源修复\\\\|数据标签\")"
+      "Bash(xargs grep -l \"阶段二\\\\|Phase 2\\\\|净值数据源修复\\\\|数据标签\")",
+      "Bash(ls -la \"D:/AI/Claude code/FOF平台开发/fof-platform/backend/phase5_s2_r1_review_\"*.md)"
     ],
     "additionalDirectories": [
       "D:\\AI\\Claude code\\FOF平台开发\\fof-platform\\frontend\\src\\app\\fund-research\\portfolio",

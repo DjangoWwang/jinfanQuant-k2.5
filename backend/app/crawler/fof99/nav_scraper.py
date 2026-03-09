@@ -7,6 +7,8 @@
 - GET /pyapi/fund/viewv2 — prices字段已解密 (v2) ⭐推荐
   params: fid(encode_id), refer(指数id,可选), sd, ed
   返回: {fund: {prices(列表), ...}, index: {...}}
+- GET /pyapi/fund/viewv2 — team_prices(团队净值), platform_prices(平台净值)
+  火富牛双数据源: 平台净值(历史长) + 团队净值(历史短但更新快)
 """
 
 from __future__ import annotations
@@ -44,6 +46,62 @@ def detect_frequency(nav_records: list[dict[str, Any]]) -> str:
     return "irregular"
 
 
+def merge_nav_sources(
+    team_nav: list[dict[str, Any]],
+    platform_nav: list[dict[str, Any]],
+    fund_id: str = "",
+) -> list[dict[str, Any]]:
+    """合并团队净值和平台净值数据源。
+
+    策略:
+    1. 团队净值历史短但更新快,优先使用
+    2. 平台净值历史长,用于补充早期缺失数据
+    3. 当两个数据源在同一天都有数据时,优先使用团队净值
+    4. 标记数据来源(data_source字段)
+
+    Args:
+        team_nav: 团队净值数据列表
+        platform_nav: 平台净值数据列表
+        fund_id: 基金ID(用于日志)
+
+    Returns:
+        合并后的净值列表,按日期升序排列
+    """
+    if not team_nav and not platform_nav:
+        return []
+
+    # 创建日期到记录的映射
+    team_by_date: dict[str, dict] = {r["nav_date"]: r for r in team_nav}
+    platform_by_date: dict[str, dict] = {r["nav_date"]: r for r in platform_nav}
+
+    # 获取所有日期并排序
+    all_dates = sorted(set(team_by_date.keys()) | set(platform_by_date.keys()))
+
+    merged: list[dict[str, Any]] = []
+    team_count = 0
+    platform_count = 0
+
+    for nav_date in all_dates:
+        if nav_date in team_by_date:
+            # 优先使用团队净值
+            record = team_by_date[nav_date].copy()
+            record["data_source"] = "team"
+            merged.append(record)
+            team_count += 1
+        elif nav_date in platform_by_date:
+            # 使用平台净值补充
+            record = platform_by_date[nav_date].copy()
+            record["data_source"] = "platform"
+            merged.append(record)
+            platform_count += 1
+
+    logger.info(
+        "合并净值 fund=%s: 团队=%d条, 平台=%d条, 合并后=%d条",
+        fund_id, team_count, platform_count, len(merged)
+    )
+    return merged
+
+
 class NavScraper:
     """从火富牛平台爬取基金历史净值数据。"""
 
@@ -71,6 +129,114 @@ class NavScraper:
         if use_v2:
             return await self._fetch_via_viewv2(fund_id, start_date, end_date)
         return await self._fetch_via_view(fund_id, start_date, end_date)
+
+    async def fetch_team_nav(
+        self,
+        fund_id: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """获取团队净值数据(历史短但更新快)。
+
+        Args:
+            fund_id: 基金的 encode_id (16位hex)。
+            start_date: 起始日期 YYYY-MM-DD。
+            end_date: 截止日期 YYYY-MM-DD。
+
+        Returns:
+            按日期升序的标准化净值列表,带data_source标记。
+        """
+        params: dict[str, Any] = {"fid": fund_id, "type": "team"}
+        if start_date:
+            params["sd"] = start_date
+        if end_date:
+            params["ed"] = end_date
+
+        try:
+            data = await self._client.pyapi_get("/pyapi/fund/viewv2", params)
+            if not data:
+                return []
+
+            fund_data = data.get("fund", {})
+            raw_prices = fund_data.get("team_prices") or fund_data.get("prices", [])
+
+            if not isinstance(raw_prices, list):
+                logger.warning("基金 %s team_prices非列表: %s", fund_id, type(raw_prices).__name__)
+                return []
+
+            nav_list = [self._normalize_nav(p, data_source="team") for p in raw_prices]
+            nav_list.sort(key=lambda x: x["nav_date"])
+            logger.info("获取团队净值 fund=%s: %d条记录", fund_id, len(nav_list))
+            return nav_list
+
+        except Exception as e:
+            logger.warning("获取团队净值失败 fund=%s: %s", fund_id, e)
+            return []
+
+    async def fetch_platform_nav(
+        self,
+        fund_id: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """获取平台净值数据(历史长)。
+
+        Args:
+            fund_id: 基金的 encode_id (16位hex)。
+            start_date: 起始日期 YYYY-MM-DD。
+            end_date: 截止日期 YYYY-MM-DD。
+
+        Returns:
+            按日期升序的标准化净值列表,带data_source标记。
+        """
+        params: dict[str, Any] = {"fid": fund_id, "type": "platform"}
+        if start_date:
+            params["sd"] = start_date
+        if end_date:
+            params["ed"] = end_date
+
+        try:
+            data = await self._client.pyapi_get("/pyapi/fund/viewv2", params)
+            if not data:
+                return []
+
+            fund_data = data.get("fund", {})
+            raw_prices = fund_data.get("platform_prices") or fund_data.get("prices", [])
+
+            if not isinstance(raw_prices, list):
+                logger.warning("基金 %s platform_prices非列表: %s", fund_id, type(raw_prices).__name__)
+                return []
+
+            nav_list = [self._normalize_nav(p, data_source="platform") for p in raw_prices]
+            nav_list.sort(key=lambda x: x["nav_date"])
+            logger.info("获取平台净值 fund=%s: %d条记录", fund_id, len(nav_list))
+            return nav_list
+
+        except Exception as e:
+            logger.warning("获取平台净值失败 fund=%s: %s", fund_id, e)
+            return []
+
+    async def fetch_merged_nav(
+        self,
+        fund_id: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """获取合并后的净值数据(团队+平台)。
+
+        Args:
+            fund_id: 基金的 encode_id (16位hex)。
+            start_date: 起始日期 YYYY-MM-DD。
+            end_date: 截止日期 YYYY-MM-DD。
+
+        Returns:
+            合并后的净值列表,按日期升序排列。
+        """
+        # 并行获取两个数据源
+        team_nav = await self.fetch_team_nav(fund_id, start_date, end_date)
+        platform_nav = await self.fetch_platform_nav(fund_id, start_date, end_date)
+
+        return merge_nav_sources(team_nav, platform_nav, fund_id)
 
     async def _fetch_via_viewv2(
         self, fund_id: str, start_date: str | None, end_date: str | None
@@ -168,7 +334,7 @@ class NavScraper:
         return records, freq
 
     @staticmethod
-    def _normalize_nav(raw: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_nav(raw: dict[str, Any], data_source: str = "fof99") -> dict[str, Any]:
         """标准化净值记录。
 
         火富牛格式: {pd, nav, cnw, cn, drawdown, pc}
@@ -180,4 +346,5 @@ class NavScraper:
             "cumulative_nav": float(raw.get("cnw") or raw.get("cn") or raw.get("nav", 0)),
             "drawdown": float(raw["drawdown"]) if raw.get("drawdown") is not None else None,
             "change_pct": float(raw["pc"]) if isinstance(raw.get("pc"), (int, float)) else None,
+            "data_source": data_source,
         }

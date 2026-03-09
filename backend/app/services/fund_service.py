@@ -97,8 +97,19 @@ class FundService:
         db: AsyncSession,
         fund_id: int,
         records: list[dict[str, Any]],
+        default_source: str = "fof99",
     ) -> int:
-        """Bulk upsert NAV records using INSERT ... ON CONFLICT DO UPDATE."""
+        """Bulk upsert NAV records using INSERT ... ON CONFLICT DO UPDATE.
+
+        Args:
+            db: 数据库会话
+            fund_id: 基金ID
+            records: 净值记录列表
+            default_source: 默认数据源(当record中没有data_source时使用)
+
+        Returns:
+            插入/更新的记录数
+        """
         if not records:
             return 0
 
@@ -111,7 +122,7 @@ class FundService:
                 "cumulative_nav": r.get("cumulative_nav"),
                 "adjusted_nav": r.get("adjusted_nav"),
                 "daily_return": r.get("daily_return"),
-                "data_source": r.get("data_source", "fof99"),
+                "data_source": r.get("data_source", default_source),
             })
 
         stmt = pg_insert(NavHistory).values(rows)
@@ -122,6 +133,7 @@ class FundService:
                 "cumulative_nav": stmt.excluded.cumulative_nav,
                 "adjusted_nav": stmt.excluded.adjusted_nav,
                 "daily_return": stmt.excluded.daily_return,
+                "data_source": stmt.excluded.data_source,
             },
         )
         await db.execute(stmt)
