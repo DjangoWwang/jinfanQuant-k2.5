@@ -127,10 +127,10 @@ class ProductService:
             administrator=product.administrator,
             product_type=product.product_type or "live",
             inception_date=product.inception_date,
-            total_shares=float(product.total_shares) if product.total_shares else None,
+            total_shares=float(product.total_shares) if product.total_shares is not None else None,
             management_fee_rate=float(product.management_fee_rate or 0),
             performance_fee_rate=float(product.performance_fee_rate or 0),
-            high_watermark=float(product.high_watermark) if product.high_watermark else None,
+            high_watermark=float(product.high_watermark) if product.high_watermark is not None else None,
             linked_portfolio_id=product.linked_portfolio_id,
             benchmark_id=product.benchmark_id,
             notes=product.notes,
@@ -391,7 +391,7 @@ class ProductService:
         items = list(result.scalars().all())
 
         # Batch load linked fund names to avoid N+1
-        linked_ids = [i.linked_fund_id for i in items if i.linked_fund_id]
+        linked_ids = [i.linked_fund_id for i in items if i.linked_fund_id is not None]
         fund_name_map: dict[int, str] = {}
         if linked_ids:
             fund_result = await db.execute(
@@ -508,6 +508,7 @@ class ProductService:
             select(
                 ValuationSnapshot.valuation_date,
                 ValuationSnapshot.unit_nav,
+                ValuationSnapshot.cumulative_nav,
                 ValuationSnapshot.total_nav,
             )
             .where(ValuationSnapshot.product_id == product_id)
@@ -524,6 +525,7 @@ class ProductService:
             NavSeriesPoint(
                 date=row.valuation_date,
                 unit_nav=float(row.unit_nav) if row.unit_nav is not None else None,
+                cumulative_nav=float(row.cumulative_nav) if row.cumulative_nav is not None else None,
                 total_nav=float(row.total_nav) if row.total_nav is not None else None,
             )
             for row in rows
