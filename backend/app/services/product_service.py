@@ -107,7 +107,7 @@ class ProductService:
         If snapshot_stats is provided (from batch_load_snapshot_stats), skip
         individual queries.
         """
-        if snapshot_stats:
+        if snapshot_stats is not None:
             latest_nav = snapshot_stats.get("unit_nav")
             latest_total_nav = snapshot_stats.get("total_nav")
             latest_date = snapshot_stats.get("valuation_date")
@@ -115,8 +115,8 @@ class ProductService:
         else:
             latest = await self._get_latest_snapshot(db, product.id)
             snap_count = await self._count_snapshots(db, product.id)
-            latest_nav = float(latest.unit_nav) if latest and latest.unit_nav else None
-            latest_total_nav = float(latest.total_nav) if latest and latest.total_nav else None
+            latest_nav = float(latest.unit_nav) if latest and latest.unit_nav is not None else None
+            latest_total_nav = float(latest.total_nav) if latest and latest.total_nav is not None else None
             latest_date = latest.valuation_date if latest else None
 
         return ProductResponse(
@@ -409,14 +409,14 @@ class ProductService:
                 item_name=item.item_name or "",
                 level=item.level or 1,
                 parent_code=item.parent_code,
-                quantity=float(item.quantity) if item.quantity else None,
-                unit_cost=float(item.unit_cost) if item.unit_cost else None,
-                cost_amount=float(item.cost_amount) if item.cost_amount else None,
-                cost_pct_nav=float(item.cost_pct_nav) if item.cost_pct_nav else None,
-                market_price=float(item.market_price) if item.market_price else None,
-                market_value=float(item.market_value) if item.market_value else None,
-                value_pct_nav=float(item.value_pct_nav) if item.value_pct_nav else None,
-                value_diff=float(item.value_diff) if item.value_diff else None,
+                quantity=float(item.quantity) if item.quantity is not None else None,
+                unit_cost=float(item.unit_cost) if item.unit_cost is not None else None,
+                cost_amount=float(item.cost_amount) if item.cost_amount is not None else None,
+                cost_pct_nav=float(item.cost_pct_nav) if item.cost_pct_nav is not None else None,
+                market_price=float(item.market_price) if item.market_price is not None else None,
+                market_value=float(item.market_value) if item.market_value is not None else None,
+                value_pct_nav=float(item.value_pct_nav) if item.value_pct_nav is not None else None,
+                value_diff=float(item.value_diff) if item.value_diff is not None else None,
                 linked_fund_id=item.linked_fund_id,
                 linked_fund_name=linked_fund_name,
             ))
@@ -428,14 +428,14 @@ class ProductService:
                 sub_fund_allocations.append(SubFundAllocation(
                     filing_number=filing_number,
                     fund_name=item.item_name or "",
-                    quantity=float(item.quantity) if item.quantity else None,
-                    unit_cost=float(item.unit_cost) if item.unit_cost else None,
-                    cost=float(item.cost_amount) if item.cost_amount else None,
-                    cost_weight_pct=float(item.cost_pct_nav) if item.cost_pct_nav else None,
-                    market_price=float(item.market_price) if item.market_price else None,
-                    market_value=float(item.market_value) if item.market_value else None,
-                    weight_pct=float(item.value_pct_nav) if item.value_pct_nav else None,
-                    appreciation=float(item.value_diff) if item.value_diff else None,
+                    quantity=float(item.quantity) if item.quantity is not None else None,
+                    unit_cost=float(item.unit_cost) if item.unit_cost is not None else None,
+                    cost=float(item.cost_amount) if item.cost_amount is not None else None,
+                    cost_weight_pct=float(item.cost_pct_nav) if item.cost_pct_nav is not None else None,
+                    market_price=float(item.market_price) if item.market_price is not None else None,
+                    market_value=float(item.market_value) if item.market_value is not None else None,
+                    weight_pct=float(item.value_pct_nav) if item.value_pct_nav is not None else None,
+                    appreciation=float(item.value_diff) if item.value_diff is not None else None,
                     linked_fund_id=item.linked_fund_id,
                 ))
 
@@ -443,10 +443,10 @@ class ProductService:
             id=snapshot.id,
             product_id=snapshot.product_id,
             valuation_date=snapshot.valuation_date,
-            unit_nav=float(snapshot.unit_nav) if snapshot.unit_nav else None,
-            cumulative_nav=float(snapshot.cumulative_nav) if snapshot.cumulative_nav else None,
-            total_nav=float(snapshot.total_nav) if snapshot.total_nav else None,
-            total_shares=float(snapshot.total_shares) if snapshot.total_shares else None,
+            unit_nav=float(snapshot.unit_nav) if snapshot.unit_nav is not None else None,
+            cumulative_nav=float(snapshot.cumulative_nav) if snapshot.cumulative_nav is not None else None,
+            total_nav=float(snapshot.total_nav) if snapshot.total_nav is not None else None,
+            total_shares=float(snapshot.total_shares) if snapshot.total_shares is not None else None,
             source_file=snapshot.source_file,
             imported_at=snapshot.imported_at,
             items=holdings,

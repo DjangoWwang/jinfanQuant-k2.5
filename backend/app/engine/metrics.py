@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import calendar
 import datetime
+import math
 from typing import Optional
 
 import numpy as np
@@ -50,7 +51,7 @@ def _annualization_factor(nav_series: pd.Series) -> float:
     """Compute annualization factor using 365 / avg_calendar_gap.
 
     This follows the 火富牛 convention: 365 / average calendar-day gap
-    between observations.  Falls back to 252 if too few data points.
+    between observations.  Falls back to 365.0 if too few data points.
     """
     s = nav_series.sort_index().dropna()
     if len(s) < 2:
@@ -107,7 +108,6 @@ def calc_annualized_return(
     # Guard against blow-up: when very few data points (e.g. 2-3 NAVs),
     # exp can be huge (365/1=365), making 1.05^365 astronomical.
     # Pre-clamp via log to avoid overflow in pow(): |log(base)*exp| <= log(100)
-    import math
     log_base = math.log(base)
     if abs(log_base * exp) > math.log(100):
         # Result would exceed ±9999%; return capped value directly
