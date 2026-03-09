@@ -261,7 +261,16 @@ export default function ProductDetailPage() {
         fetchApi<{ items: ValuationSnapshot[]; total: number }>(`/products/${productId}/valuations?page_size=50`),
       ]);
       setProduct(prod);
-      setNavSeries(nav.nav_series);
+      // 根据产品成立日期截断净值数据（如鹭岛晋帆从2025-05-23开始）
+      let filteredNavSeries = nav.nav_series;
+      if (prod.inception_date && nav.nav_series.length > 0) {
+        filteredNavSeries = nav.nav_series.filter(n => n.date >= prod.inception_date!);
+        if (filteredNavSeries.length === 0) {
+          // 如果截断后没有数据，保留原始数据
+          filteredNavSeries = nav.nav_series;
+        }
+      }
+      setNavSeries(filteredNavSeries);
       setAllSnapshots(valuations.items);
 
       // Load latest snapshot detail

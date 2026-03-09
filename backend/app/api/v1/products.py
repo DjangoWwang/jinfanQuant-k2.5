@@ -362,18 +362,27 @@ async def get_product_metrics(
     if not product:
         raise HTTPException(status_code=404, detail="产品不存在")
 
+    # Apply inception_date truncation for products like 鹭岛晋帆 (from 2025-05-23)
+    effective_start_date = start_date
+    if product.inception_date:
+        if not effective_start_date or effective_start_date < product.inception_date:
+            effective_start_date = product.inception_date
+    
     if preset:
         if preset not in _VALID_PRESETS:
             raise HTTPException(status_code=400, detail=f"无效的区间预设: {preset}")
-        if not start_date:
-            start_date, end_date = interval_dates(preset)
+        if not effective_start_date:
+            effective_start_date, end_date = interval_dates(preset)
+            # Re-apply inception_date after preset calculation
+            if product.inception_date and effective_start_date < product.inception_date:
+                effective_start_date = product.inception_date
 
     # Build NAV series from product's nav data (prefers cumulative_nav)
-    nav_points = await product_service.get_nav_series(db, product_id, start_date, end_date)
+    nav_points = await product_service.get_nav_series(db, product_id, effective_start_date, end_date)
 
     # Also try calculated NAVs
     calc_records = await nav_calc_service.get_calculated_nav_series(
-        db, product_id, start_date, end_date,
+        db, product_id, effective_start_date, end_date,
     )
 
     def _pick_nav(cumulative, unit):
@@ -434,14 +443,20 @@ async def get_product_nav(
     """Get product NAV series.
 
     Priority: calculated product_navs > linked fund nav_history > valuation snapshots.
+    Data is truncated by inception_date if available (e.g., 鹭岛晋帆 from 2025-05-23).
     """
     product = await product_service.get_product(db, product_id)
     if not product:
         raise HTTPException(status_code=404, detail="产品不存在")
+    
+    # Use inception_date as start_date if not provided (for products like 鹭岛晋帆)
+    effective_start_date = start_date
+    if product.inception_date and not start_date:
+        effective_start_date = product.inception_date
 
     # Try calculated NAVs first
     calc_records = await nav_calc_service.get_calculated_nav_series(
-        db, product_id, start_date, end_date,
+        db, product_id, effective_start_date, end_date,
     )
     if calc_records:
         nav_series_list = [
@@ -461,7 +476,7 @@ async def get_product_nav(
 
     # Fallback to existing logic (linked fund / valuation snapshots)
     nav_series_fallback = await product_service.get_nav_series(
-        db, product_id, start_date, end_date
+        db, product_id, effective_start_date, end_date
     )
     return ProductNavResponse(
         product_id=product_id,
